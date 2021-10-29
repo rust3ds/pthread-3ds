@@ -1,0 +1,14 @@
+[package]
+name = "pthread-3ds"
+authors = [ "Andrea Ciliberti <meziu210@icloud.com>" ]
+version = "0.1.0"
+license = "MIT/Apache 2.0"
+edition = "2018"
+
+[lib]
+name = "pthread_3ds"
+path = "src/lib.rs"
+crate-type = ["staticlib"]
+
+[dependencies.libc]
+path = "../libc"

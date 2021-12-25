@@ -11,4 +11,4 @@ path = "src/lib.rs"
 crate-type = ["staticlib"]
 
 [dependencies.libc]
-path = "../libc"
+git = "https://github.com/Meziu/libc.git"

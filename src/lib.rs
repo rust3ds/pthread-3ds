@@ -1,4 +1,5 @@
 #![feature(thread_local)]
+#![allow(non_camel_case_types)]
 
 // LIBCTRU THREADS
 
@@ -59,13 +60,11 @@ extern "C" {
 
 // PTHREAD LAYER TO CALL LIBCTRU
 
-use libc;
-
 #[no_mangle]
 pub unsafe extern "C" fn pthread_create(
     native: *mut libc::pthread_t,
     attr: *const libc::pthread_attr_t,
-    f: extern "C" fn(_: *mut libc::c_void) -> *mut libc::c_void,
+    _f: extern "C" fn(_: *mut libc::c_void) -> *mut libc::c_void,
     value: *mut libc::c_void,
 ) -> libc::c_int {
     let mut priority = 0;
@@ -94,7 +93,7 @@ pub unsafe extern "C" fn pthread_create(
 #[no_mangle]
 pub unsafe extern "C" fn pthread_join(
     native: libc::pthread_t,
-    value: *mut *mut libc::c_void,
+    _value: *mut *mut libc::c_void,
 ) -> libc::c_int {
     threadJoin(native as *mut libc::c_void, u64::max_value());
     threadFree(native as *mut libc::c_void);
@@ -110,12 +109,12 @@ pub unsafe extern "C" fn pthread_detach(thread: libc::pthread_t) -> libc::c_int 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_attr_init(attr: *mut libc::pthread_attr_t) -> libc::c_int {
+pub unsafe extern "C" fn pthread_attr_init(_attr: *mut libc::pthread_attr_t) -> libc::c_int {
     0
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_attr_destroy(attr: *mut libc::pthread_attr_t) -> libc::c_int {
+pub unsafe extern "C" fn pthread_attr_destroy(_attr: *mut libc::pthread_attr_t) -> libc::c_int {
     0
 }
 
@@ -140,7 +139,7 @@ pub unsafe extern "C" fn sched_yield() -> libc::c_int {
 #[no_mangle]
 pub unsafe extern "C" fn pthread_cond_init(
     cond: *mut libc::pthread_cond_t,
-    attr: *const libc::pthread_condattr_t,
+    _attr: *const libc::pthread_condattr_t,
 ) -> libc::c_int {
     CondVar_Init(cond as _);
 
@@ -183,13 +182,13 @@ pub unsafe extern "C" fn pthread_cond_timedwait(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_cond_destroy(cond: *mut libc::pthread_cond_t) -> libc::c_int {
+pub unsafe extern "C" fn pthread_cond_destroy(_cond: *mut libc::pthread_cond_t) -> libc::c_int {
     0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_mutexattr_init(
-    attr: *mut libc::pthread_mutexattr_t,
+    _attr: *mut libc::pthread_mutexattr_t,
 ) -> libc::c_int {
     0
 }
@@ -227,7 +226,7 @@ pub unsafe extern "C" fn pthread_mutex_init(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_mutex_destroy(lock: *mut libc::pthread_mutex_t) -> libc::c_int {
+pub unsafe extern "C" fn pthread_mutex_destroy(_lock: *mut libc::pthread_mutex_t) -> libc::c_int {
     0
 }
 
@@ -272,67 +271,66 @@ pub unsafe extern "C" fn pthread_mutex_unlock(lock: *mut libc::pthread_mutex_t) 
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_mutexattr_destroy(
-    attr: *mut libc::pthread_mutexattr_t,
+    _attr: *mut libc::pthread_mutexattr_t,
 ) -> libc::c_int {
     0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_rwlock_init(
-    lock: *mut libc::pthread_rwlock_t,
-    attr: *const libc::pthread_rwlockattr_t,
+    _lock: *mut libc::pthread_rwlock_t,
+    _attr: *const libc::pthread_rwlockattr_t,
 ) -> libc::c_int {
     1
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_rwlock_destroy(lock: *mut libc::pthread_rwlock_t) -> libc::c_int {
+pub unsafe extern "C" fn pthread_rwlock_destroy(_lock: *mut libc::pthread_rwlock_t) -> libc::c_int {
     1
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_rwlock_rdlock(lock: *mut libc::pthread_rwlock_t) -> libc::c_int {
+pub unsafe extern "C" fn pthread_rwlock_rdlock(_lock: *mut libc::pthread_rwlock_t) -> libc::c_int {
     1
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_rwlock_tryrdlock(
-    lock: *mut libc::pthread_rwlock_t,
+    _lock: *mut libc::pthread_rwlock_t,
 ) -> libc::c_int {
     1
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_rwlock_wrlock(lock: *mut libc::pthread_rwlock_t) -> libc::c_int {
+pub unsafe extern "C" fn pthread_rwlock_wrlock(_lock: *mut libc::pthread_rwlock_t) -> libc::c_int {
     1
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_rwlock_trywrlock(
-    lock: *mut libc::pthread_rwlock_t,
+    _lock: *mut libc::pthread_rwlock_t,
 ) -> libc::c_int {
     1
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_rwlock_unlock(lock: *mut libc::pthread_rwlock_t) -> libc::c_int {
+pub unsafe extern "C" fn pthread_rwlock_unlock(_lock: *mut libc::pthread_rwlock_t) -> libc::c_int {
     1
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_rwlockattr_init(
-    attr: *mut libc::pthread_rwlockattr_t,
+    _attr: *mut libc::pthread_rwlockattr_t,
 ) -> libc::c_int {
     1
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_rwlockattr_destroy(
-    attr: *mut libc::pthread_rwlockattr_t,
+    _attr: *mut libc::pthread_rwlockattr_t,
 ) -> libc::c_int {
     1
 }
-
 
 // THREAD KEYS IMPLEMENTATION FOR RUST STD
 
@@ -342,7 +340,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub type Key = usize;
 
-type Dtor = unsafe extern fn(*mut u8);
+type Dtor = unsafe extern "C" fn(*mut u8);
 
 static NEXT_KEY: AtomicUsize = AtomicUsize::new(1);
 
@@ -372,7 +370,6 @@ pub unsafe fn create(dtor: Option<unsafe extern "C" fn(*mut u8)>) -> Key {
     key
 }
 
-
 #[no_mangle]
 pub unsafe extern "C" fn pthread_key_create(
     key: *mut libc::pthread_key_t,
@@ -380,9 +377,9 @@ pub unsafe extern "C" fn pthread_key_create(
 ) -> libc::c_int {
     let new_key = NEXT_KEY.fetch_add(1, Ordering::SeqCst);
     keys().insert(new_key, std::mem::transmute(dtor));
-    
+
     *key = new_key as u32;
-    
+
     0
 }
 

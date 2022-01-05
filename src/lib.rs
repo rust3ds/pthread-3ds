@@ -1,6 +1,12 @@
 #![feature(thread_local)]
 #![allow(non_camel_case_types)]
 
+/// Call this somewhere to force Rust to link this module.
+/// The call doesn't need to execute, just exist.
+///
+/// See https://github.com/rust-lang/rust/issues/47384
+pub fn init() {}
+
 // LIBCTRU THREADS
 
 pub type _LOCK_T = i32;

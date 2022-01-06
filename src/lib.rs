@@ -282,60 +282,124 @@ pub unsafe extern "C" fn pthread_mutexattr_destroy(
     0
 }
 
+/// Initializes the rwlock internal members if they weren't already
+fn init_rwlock(lock: *mut libc::pthread_rwlock_t) {
+    unsafe {
+        let init_bool = lock.offset(55) as *mut bool;
+        if *init_bool {
+            ()
+        } else {
+            let mutex = lock as *mut libc::pthread_mutex_t;
+            let cvar = lock.offset(50) as *mut i32;
+
+            let mut attr = std::mem::MaybeUninit::<libc::pthread_mutexattr_t>::uninit();
+            pthread_mutexattr_init(attr.as_mut_ptr());
+            let mut attr = attr.assume_init();
+            pthread_mutexattr_settype(&mut attr, libc::PTHREAD_MUTEX_NORMAL);
+
+            pthread_mutex_init(mutex, &attr);
+            pthread_cond_init(cvar as *mut _, core::ptr::null());
+
+            *init_bool = true;
+        }
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn pthread_rwlock_init(
-    _lock: *mut libc::pthread_rwlock_t,
+    lock: *mut libc::pthread_rwlock_t,
     _attr: *const libc::pthread_rwlockattr_t,
 ) -> libc::c_int {
-    1
+    init_rwlock(lock);
+
+    0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_rwlock_destroy(_lock: *mut libc::pthread_rwlock_t) -> libc::c_int {
-    1
+    0
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_rwlock_rdlock(_lock: *mut libc::pthread_rwlock_t) -> libc::c_int {
-    1
+pub unsafe extern "C" fn pthread_rwlock_rdlock(lock: *mut libc::pthread_rwlock_t) -> libc::c_int {
+    init_rwlock(lock);
+    let mutex = lock as *mut libc::pthread_mutex_t;
+
+    pthread_mutex_lock(mutex);
+
+    pthread_mutex_unlock(mutex);
+
+    0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_rwlock_tryrdlock(
-    _lock: *mut libc::pthread_rwlock_t,
+    lock: *mut libc::pthread_rwlock_t,
 ) -> libc::c_int {
-    1
+    init_rwlock(lock);
+    let mutex = lock as *mut libc::pthread_mutex_t;
+
+    if !(pthread_mutex_trylock(mutex) == 0) {
+        return 1
+    }
+
+    pthread_mutex_unlock(mutex);
+
+    0
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_rwlock_wrlock(_lock: *mut libc::pthread_rwlock_t) -> libc::c_int {
-    1
+pub unsafe extern "C" fn pthread_rwlock_wrlock(lock: *mut libc::pthread_rwlock_t) -> libc::c_int {
+    init_rwlock(lock);
+    let mutex = lock as *mut libc::pthread_mutex_t;
+
+    pthread_mutex_lock(mutex);
+
+    pthread_mutex_unlock(mutex);
+
+    0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_rwlock_trywrlock(
-    _lock: *mut libc::pthread_rwlock_t,
+    lock: *mut libc::pthread_rwlock_t,
 ) -> libc::c_int {
-    1
+    init_rwlock(lock);
+    let mutex = lock as *mut libc::pthread_mutex_t;
+
+    if !(pthread_mutex_trylock(mutex) == 0) {
+        return 1
+    }
+
+    pthread_mutex_unlock(mutex);
+    
+    0
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_rwlock_unlock(_lock: *mut libc::pthread_rwlock_t) -> libc::c_int {
-    1
+pub unsafe extern "C" fn pthread_rwlock_unlock(lock: *mut libc::pthread_rwlock_t) -> libc::c_int {
+    init_rwlock(lock);
+    let mutex = lock as *mut libc::pthread_mutex_t;
+    let cvar = lock.offset(41) as *mut i32;
+
+    pthread_cond_broadcast(cvar as _);
+    pthread_mutex_unlock(mutex);
+
+    0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_rwlockattr_init(
     _attr: *mut libc::pthread_rwlockattr_t,
 ) -> libc::c_int {
-    1
+    0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_rwlockattr_destroy(
     _attr: *mut libc::pthread_rwlockattr_t,
 ) -> libc::c_int {
-    1
+    0
 }
 
 // THREAD KEYS IMPLEMENTATION FOR RUST STD

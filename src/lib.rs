@@ -259,7 +259,7 @@ pub unsafe extern "C" fn pthread_mutex_trylock(lock: *mut libc::pthread_mutex_t)
         return RecursiveLock_TryLock(lock as _);
     }
 
-    0
+    -1
 }
 
 #[no_mangle]
@@ -282,25 +282,34 @@ pub unsafe extern "C" fn pthread_mutexattr_destroy(
     0
 }
 
+struct rwlock_clear {
+    mutex: libc::pthread_mutex_t,
+    cvar: i32,
+    num_readers: i32,
+    writer_active: bool,
+    initialized: bool,
+}
+
 /// Initializes the rwlock internal members if they weren't already
 fn init_rwlock(lock: *mut libc::pthread_rwlock_t) {
-    unsafe {
-        let init_bool = lock.offset(55) as *mut bool;
-        if *init_bool {
-            ()
-        } else {
-            let mutex = lock as *mut libc::pthread_mutex_t;
-            let cvar = lock.offset(50) as *mut i32;
+    let lock = lock as *mut rwlock_clear;
 
+    unsafe {
+        if (*lock).initialized {
+            return
+        } else {
             let mut attr = std::mem::MaybeUninit::<libc::pthread_mutexattr_t>::uninit();
             pthread_mutexattr_init(attr.as_mut_ptr());
             let mut attr = attr.assume_init();
             pthread_mutexattr_settype(&mut attr, libc::PTHREAD_MUTEX_NORMAL);
 
-            pthread_mutex_init(mutex, &attr);
-            pthread_cond_init(cvar as *mut _, core::ptr::null());
+            pthread_mutex_init(&mut (*lock).mutex, &attr);
+            pthread_cond_init(&mut (*lock).cvar as *mut i32 as *mut _, core::ptr::null());
 
-            *init_bool = true;
+            (*lock).num_readers = 0;
+            (*lock).writer_active = false;
+
+            (*lock).initialized = true;
         }
     }
 }
@@ -323,11 +332,17 @@ pub unsafe extern "C" fn pthread_rwlock_destroy(_lock: *mut libc::pthread_rwlock
 #[no_mangle]
 pub unsafe extern "C" fn pthread_rwlock_rdlock(lock: *mut libc::pthread_rwlock_t) -> libc::c_int {
     init_rwlock(lock);
-    let mutex = lock as *mut libc::pthread_mutex_t;
+    let lock = lock as *mut rwlock_clear;
 
-    pthread_mutex_lock(mutex);
+    pthread_mutex_lock(&mut (*lock).mutex);
 
-    pthread_mutex_unlock(mutex);
+    while (*lock).writer_active {
+        pthread_cond_wait(&mut (*lock).cvar as *mut i32 as _, &mut (*lock).mutex);
+    }
+
+    (*lock).num_readers += 1;
+
+    pthread_mutex_unlock(&mut (*lock).mutex);
 
     0
 }
@@ -337,13 +352,19 @@ pub unsafe extern "C" fn pthread_rwlock_tryrdlock(
     lock: *mut libc::pthread_rwlock_t,
 ) -> libc::c_int {
     init_rwlock(lock);
-    let mutex = lock as *mut libc::pthread_mutex_t;
+    let lock = lock as *mut rwlock_clear;
 
-    if !(pthread_mutex_trylock(mutex) == 0) {
-        return 1
+    if pthread_mutex_trylock(&mut (*lock).mutex) != 0 {
+        return -1
     }
 
-    pthread_mutex_unlock(mutex);
+    while (*lock).writer_active {
+        pthread_cond_wait(&mut (*lock).cvar as *mut i32 as _, &mut (*lock).mutex);
+    }
+
+    (*lock).num_readers += 1;
+
+    pthread_mutex_unlock(&mut (*lock).mutex);
 
     0
 }
@@ -351,11 +372,17 @@ pub unsafe extern "C" fn pthread_rwlock_tryrdlock(
 #[no_mangle]
 pub unsafe extern "C" fn pthread_rwlock_wrlock(lock: *mut libc::pthread_rwlock_t) -> libc::c_int {
     init_rwlock(lock);
-    let mutex = lock as *mut libc::pthread_mutex_t;
+    let lock = lock as *mut rwlock_clear;
 
-    pthread_mutex_lock(mutex);
+    pthread_mutex_lock(&mut (*lock).mutex);
 
-    pthread_mutex_unlock(mutex);
+    while (*lock).writer_active || (*lock).num_readers > 0 {
+        pthread_cond_wait(&mut (*lock).cvar as *mut i32 as _, &mut (*lock).mutex);
+    }
+
+    (*lock).writer_active = true;
+
+    pthread_mutex_unlock(&mut (*lock).mutex);
 
     0
 }
@@ -365,25 +392,46 @@ pub unsafe extern "C" fn pthread_rwlock_trywrlock(
     lock: *mut libc::pthread_rwlock_t,
 ) -> libc::c_int {
     init_rwlock(lock);
-    let mutex = lock as *mut libc::pthread_mutex_t;
+    let lock = lock as *mut rwlock_clear;
 
-    if !(pthread_mutex_trylock(mutex) == 0) {
-        return 1
+    if pthread_mutex_trylock(&mut (*lock).mutex) != 0 {
+        return -1
     }
 
-    pthread_mutex_unlock(mutex);
-    
+    while (*lock).writer_active || (*lock).num_readers > 0 {
+        pthread_cond_wait(&mut (*lock).cvar as *mut i32 as _, &mut (*lock).mutex);
+    }
+
+    (*lock).writer_active = true;
+
+    pthread_mutex_unlock(&mut (*lock).mutex);
+
     0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_rwlock_unlock(lock: *mut libc::pthread_rwlock_t) -> libc::c_int {
     init_rwlock(lock);
-    let mutex = lock as *mut libc::pthread_mutex_t;
-    let cvar = lock.offset(41) as *mut i32;
+    let lock = lock as *mut rwlock_clear;
 
-    pthread_cond_broadcast(cvar as _);
-    pthread_mutex_unlock(mutex);
+    pthread_mutex_lock(&mut (*lock).mutex);
+
+    // If there are readers and no writer => Must be a reader
+    if (*lock).num_readers > 0 && !(*lock).writer_active {
+        (*lock).num_readers -= 1;
+
+        // If there are no more readers, signal to a waiting writer
+        if (*lock).num_readers == 0 {
+            pthread_cond_signal(&mut (*lock).cvar as *mut i32 as _);
+        }
+    // If there are no readers and a writer => Must be a writer
+    } else if (*lock).num_readers == 0 && (*lock).writer_active {
+        (*lock).writer_active = false;
+
+        pthread_cond_broadcast(&mut (*lock).cvar as *mut i32 as _);
+    }
+
+    pthread_mutex_unlock(&mut (*lock).mutex);
 
     0
 }

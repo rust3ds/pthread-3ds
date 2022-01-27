@@ -20,126 +20,77 @@ pub struct __lock_t {
     pub counter: u32,
 }
 
-pub type LightLock = _LOCK_T;
-pub type RecursiveLock = _LOCK_RECURSIVE_T;
-pub type CondVar = i32;
-pub type Thread = *mut libc::c_void;
-pub type ThreadFunc = extern "C" fn(arg1: *mut libc::c_void);
-
-type ResultCode = u32;
+type LightLock = _LOCK_T;
+type RecursiveLock = _LOCK_RECURSIVE_T;
+type CondVar = i32;
 
 extern "C" {
-    pub fn svcSleepThread(ns: i64);
-    pub fn svcGetThreadPriority(out: *mut i32, handle: u32) -> ResultCode;
+    fn LightLock_Init(lock: *mut LightLock);
+    fn LightLock_Lock(lock: *mut LightLock);
+    fn LightLock_TryLock(lock: *mut LightLock) -> libc::c_int;
+    fn LightLock_Unlock(lock: *mut LightLock);
 
-    pub fn threadCreate(
-        entrypoint: ThreadFunc,
-        arg: *mut libc::c_void,
-        stack_size: libc::size_t,
-        prio: libc::c_int,
-        core_id: libc::c_int,
-        detached: bool,
-    ) -> Thread;
-    pub fn threadJoin(thread: Thread, timeout_ns: u64) -> ResultCode;
-    pub fn threadFree(thread: Thread);
-    pub fn threadDetach(thread: Thread);
+    fn RecursiveLock_Init(lock: *mut RecursiveLock);
+    fn RecursiveLock_Lock(lock: *mut RecursiveLock);
+    fn RecursiveLock_TryLock(lock: *mut RecursiveLock) -> libc::c_int;
+    fn RecursiveLock_Unlock(lock: *mut RecursiveLock);
 
-    pub fn LightLock_Init(lock: *mut LightLock);
-    pub fn LightLock_Lock(lock: *mut LightLock);
-    pub fn LightLock_TryLock(lock: *mut LightLock) -> libc::c_int;
-    pub fn LightLock_Unlock(lock: *mut LightLock);
-
-    pub fn RecursiveLock_Init(lock: *mut RecursiveLock);
-    pub fn RecursiveLock_Lock(lock: *mut RecursiveLock);
-    pub fn RecursiveLock_TryLock(lock: *mut RecursiveLock) -> libc::c_int;
-    pub fn RecursiveLock_Unlock(lock: *mut RecursiveLock);
-
-    pub fn CondVar_Init(cv: *mut CondVar);
-    pub fn CondVar_Wait(cv: *mut CondVar, lock: *mut LightLock);
-    pub fn CondVar_WaitTimeout(
+    fn CondVar_Init(cv: *mut CondVar);
+    fn CondVar_Wait(cv: *mut CondVar, lock: *mut LightLock);
+    fn CondVar_WaitTimeout(
         cv: *mut CondVar,
         lock: *mut LightLock,
         timeout_ns: i64,
     ) -> libc::c_int;
-    pub fn CondVar_WakeUp(cv: *mut CondVar, num_threads: i32);
+    fn CondVar_WakeUp(cv: *mut CondVar, num_threads: i32);
 }
 
 // PTHREAD LAYER TO CALL LIBCTRU
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_create(
-    native: *mut libc::pthread_t,
-    attr: *const libc::pthread_attr_t,
+    _native: *mut libc::pthread_t,
+    _attr: *const libc::pthread_attr_t,
     _f: extern "C" fn(_: *mut libc::c_void) -> *mut libc::c_void,
-    value: *mut libc::c_void,
+    _value: *mut libc::c_void,
 ) -> libc::c_int {
-    let mut priority = 0;
-    svcGetThreadPriority(&mut priority, 0xFFFF8000);
-
-    extern "C" fn thread_start(main: *mut libc::c_void) {
-        unsafe {
-            Box::from_raw(main as *mut Box<dyn FnOnce()>)();
-        }
-    }
-
-    let handle = threadCreate(
-        thread_start,
-        value,
-        *(attr as *mut libc::size_t),
-        priority,
-        -2,
-        false,
-    );
-
-    *native = handle as _;
-
-    0
+    1
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_join(
-    native: libc::pthread_t,
+    _native: libc::pthread_t,
     _value: *mut *mut libc::c_void,
 ) -> libc::c_int {
-    threadJoin(native as *mut libc::c_void, u64::max_value());
-    threadFree(native as *mut libc::c_void);
-
-    0
+    1
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_detach(thread: libc::pthread_t) -> libc::c_int {
-    threadDetach(thread as _);
-
-    0
+pub unsafe extern "C" fn pthread_detach(_thread: libc::pthread_t) -> libc::c_int {
+    1
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_attr_init(_attr: *mut libc::pthread_attr_t) -> libc::c_int {
-    0
+    1
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_attr_destroy(_attr: *mut libc::pthread_attr_t) -> libc::c_int {
-    0
+    1
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_attr_setstacksize(
-    attr: *mut libc::pthread_attr_t,
-    stack_size: libc::size_t,
+    _attr: *mut libc::pthread_attr_t,
+    _stack_size: libc::size_t,
 ) -> libc::c_int {
-    let pointer = attr as *mut libc::size_t;
-    *pointer = stack_size;
-
-    0
+    1
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn sched_yield() -> libc::c_int {
-    svcSleepThread(0);
-
-    0
+    1
 }
 
 #[no_mangle]

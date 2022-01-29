@@ -6,4 +6,4 @@ license = "MIT/Apache 2.0"
 edition = "2021"
 
 [dependencies]
-libc = { git = "https://github.com/Meziu/libc.git" }
+libc = "0.2.116"

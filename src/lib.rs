@@ -9,40 +9,6 @@
 /// See https://github.com/rust-lang/rust/issues/47384
 pub fn init() {}
 
-// LIBCTRU THREADS
-
-pub type _LOCK_T = i32;
-pub type _LOCK_RECURSIVE_T = __lock_t;
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct __lock_t {
-    pub lock: _LOCK_T,
-    pub thread_tag: u32,
-    pub counter: u32,
-}
-
-type LightLock = _LOCK_T;
-type RecursiveLock = _LOCK_RECURSIVE_T;
-type CondVar = i32;
-
-extern "C" {
-    fn LightLock_Init(lock: *mut LightLock);
-    fn LightLock_Lock(lock: *mut LightLock);
-    fn LightLock_TryLock(lock: *mut LightLock) -> libc::c_int;
-    fn LightLock_Unlock(lock: *mut LightLock);
-
-    fn RecursiveLock_Init(lock: *mut RecursiveLock);
-    fn RecursiveLock_Lock(lock: *mut RecursiveLock);
-    fn RecursiveLock_TryLock(lock: *mut RecursiveLock) -> libc::c_int;
-    fn RecursiveLock_Unlock(lock: *mut RecursiveLock);
-
-    fn CondVar_Init(cv: *mut CondVar);
-    fn CondVar_Wait(cv: *mut CondVar, lock: *mut LightLock);
-    fn CondVar_WaitTimeout(cv: *mut CondVar, lock: *mut LightLock, timeout_ns: i64) -> libc::c_int;
-    fn CondVar_WakeUp(cv: *mut CondVar, num_threads: i32);
-}
-
 // PTHREAD LAYER TO CALL LIBCTRU
 
 #[no_mangle]
@@ -96,21 +62,21 @@ pub unsafe extern "C" fn pthread_cond_init(
     cond: *mut libc::pthread_cond_t,
     _attr: *const libc::pthread_condattr_t,
 ) -> libc::c_int {
-    CondVar_Init(cond as _);
+    ctru_sys::CondVar_Init(cond as _);
 
     0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_cond_signal(cond: *mut libc::pthread_cond_t) -> libc::c_int {
-    CondVar_WakeUp(cond as _, 1);
+    ctru_sys::CondVar_WakeUp(cond as _, 1);
 
     0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_cond_broadcast(cond: *mut libc::pthread_cond_t) -> libc::c_int {
-    CondVar_WakeUp(cond as _, -1);
+    ctru_sys::CondVar_WakeUp(cond as _, -1);
 
     0
 }
@@ -120,7 +86,7 @@ pub unsafe extern "C" fn pthread_cond_wait(
     cond: *mut libc::pthread_cond_t,
     lock: *mut libc::pthread_mutex_t,
 ) -> libc::c_int {
-    CondVar_Wait(cond as _, lock as _);
+    ctru_sys::CondVar_Wait(cond as _, lock as _);
 
     0
 }
@@ -157,7 +123,7 @@ pub unsafe extern "C" fn pthread_cond_timedwait(
         // Don't go negative
         .max(0);
 
-    let r = CondVar_WaitTimeout(cond as _, lock as _, duration_nsec);
+    let r = ctru_sys::CondVar_WaitTimeout(cond as _, lock as _, duration_nsec);
 
     // CondVar_WaitTimeout returns a boolean which is true (nonzero) if it timed out
     if r == 0 {
@@ -201,9 +167,9 @@ pub unsafe extern "C" fn pthread_mutex_init(
     let attr: libc::c_int = *(attr as *const libc::c_int);
 
     if attr == libc::PTHREAD_MUTEX_NORMAL {
-        LightLock_Init(lock as _);
+        ctru_sys::LightLock_Init(lock as _);
     } else if attr == libc::PTHREAD_MUTEX_RECURSIVE {
-        RecursiveLock_Init(lock as _)
+        ctru_sys::RecursiveLock_Init(lock as _)
     }
 
     *(lock.offset(39)) = attr as u8;
@@ -221,9 +187,9 @@ pub unsafe extern "C" fn pthread_mutex_lock(lock: *mut libc::pthread_mutex_t) ->
     let lock = lock as *const u8;
 
     if *(lock.offset(39)) as u8 == libc::PTHREAD_MUTEX_NORMAL as u8 {
-        LightLock_Lock(lock as _);
+        ctru_sys::LightLock_Lock(lock as _);
     } else if *(lock.offset(39)) as u8 == libc::PTHREAD_MUTEX_RECURSIVE as u8 {
-        RecursiveLock_Lock(lock as _);
+        ctru_sys::RecursiveLock_Lock(lock as _);
     }
 
     0
@@ -234,9 +200,9 @@ pub unsafe extern "C" fn pthread_mutex_trylock(lock: *mut libc::pthread_mutex_t)
     let lock = lock as *const u8;
 
     if *(lock.offset(39)) as u8 == libc::PTHREAD_MUTEX_NORMAL as u8 {
-        return LightLock_TryLock(lock as _);
+        return ctru_sys::LightLock_TryLock(lock as _);
     } else if *(lock.offset(39)) as u8 == libc::PTHREAD_MUTEX_RECURSIVE as u8 {
-        return RecursiveLock_TryLock(lock as _);
+        return ctru_sys::RecursiveLock_TryLock(lock as _);
     }
 
     -1
@@ -247,9 +213,9 @@ pub unsafe extern "C" fn pthread_mutex_unlock(lock: *mut libc::pthread_mutex_t) 
     let lock = lock as *const u8;
 
     if *(lock.offset(39)) as u8 == libc::PTHREAD_MUTEX_NORMAL as u8 {
-        LightLock_Unlock(lock as _);
+        ctru_sys::LightLock_Unlock(lock as _);
     } else if *(lock.offset(39)) as u8 == libc::PTHREAD_MUTEX_RECURSIVE as u8 {
-        RecursiveLock_Unlock(lock as _);
+        ctru_sys::RecursiveLock_Unlock(lock as _);
     }
 
     0

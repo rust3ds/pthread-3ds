@@ -131,9 +131,40 @@ pub unsafe extern "C" fn pthread_cond_timedwait(
     lock: *mut libc::pthread_mutex_t,
     abstime: *const libc::timespec,
 ) -> libc::c_int {
-    let nsec: i64 = ((*abstime).tv_sec as i64 * 1_000_000_000) + (*abstime).tv_nsec as i64;
+    // libctru expects a duration, but we have an absolute timestamp.
+    // Convert to a duration before calling libctru.
 
-    CondVar_WaitTimeout(cond as _, lock as _, nsec)
+    // Get the current time so we can make a duration
+    let mut now = libc::timeval {
+        tv_sec: 0,
+        tv_usec: 0,
+    };
+    let r = libc::gettimeofday(&mut now, ptr::null_mut());
+    if r != 0 {
+        return r;
+    }
+
+    // Calculate the duration
+    let duration_nsec = (*abstime)
+        .tv_sec
+        // Get the difference in seconds
+        .saturating_sub(now.tv_sec)
+        // Convert to nanoseconds
+        .saturating_mul(1_000_000_000)
+        // Add the difference in nanoseconds
+        .saturating_add((*abstime).tv_nsec as i64)
+        .saturating_sub(now.tv_usec as i64 * 1_000)
+        // Don't go negative
+        .max(0);
+
+    let r = CondVar_WaitTimeout(cond as _, lock as _, duration_nsec);
+
+    // CondVar_WaitTimeout returns a boolean which is true (nonzero) if it timed out
+    if r == 0 {
+        0
+    } else {
+        libc::ETIMEDOUT
+    }
 }
 
 #[no_mangle]

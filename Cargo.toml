@@ -7,4 +7,4 @@ edition = "2021"
 
 [dependencies]
 libc = "0.2.116"
-once_cell = "1.0"
+spin = { version = "0.9", default-features = false, features = ["rwlock", "std"] }

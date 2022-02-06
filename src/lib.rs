@@ -399,26 +399,24 @@ pub unsafe extern "C" fn pthread_rwlockattr_destroy(
 
 // THREAD KEYS IMPLEMENTATION FOR RUST STD
 
-use once_cell::sync::Lazy;
+use spin::rwlock::RwLock;
 use std::collections::BTreeMap;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{PoisonError, RwLock};
 
 type Key = usize;
 type Destructor = unsafe extern "C" fn(*mut libc::c_void);
 
 static NEXT_KEY: AtomicUsize = AtomicUsize::new(1);
 
-static KEYS: Lazy<RwLock<BTreeMap<Key, Option<Destructor>>>> = Lazy::new(RwLock::default);
+// This is a spin-lock RwLock which yields the thread every loop
+static KEYS: RwLock<BTreeMap<Key, Option<Destructor>>, spin::Yield> = RwLock::new(BTreeMap::new());
 
 #[thread_local]
 static mut LOCALS: BTreeMap<Key, *mut libc::c_void> = BTreeMap::new();
 
 fn is_valid_key(key: Key) -> bool {
-    KEYS.read()
-        .unwrap_or_else(PoisonError::into_inner)
-        .contains_key(&(key as Key))
+    KEYS.read().contains_key(&(key as Key))
 }
 
 #[no_mangle]
@@ -427,9 +425,7 @@ pub unsafe extern "C" fn pthread_key_create(
     destructor: Option<Destructor>,
 ) -> libc::c_int {
     let new_key = NEXT_KEY.fetch_add(1, Ordering::SeqCst);
-    KEYS.write()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(new_key, destructor);
+    KEYS.write().insert(new_key, destructor);
 
     *key = new_key as libc::pthread_key_t;
 
@@ -438,11 +434,7 @@ pub unsafe extern "C" fn pthread_key_create(
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_key_delete(key: libc::pthread_key_t) -> libc::c_int {
-    match KEYS
-        .write()
-        .unwrap_or_else(PoisonError::into_inner)
-        .remove(&(key as Key))
-    {
+    match KEYS.write().remove(&(key as Key)) {
         // We had a entry, so it was a valid key.
         // It's officially undefined behavior if they use the key after this,
         // so don't worry about cleaning up LOCALS, especially since we can't

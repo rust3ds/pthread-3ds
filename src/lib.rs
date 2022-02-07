@@ -13,48 +13,78 @@ pub fn init() {}
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_create(
-    _native: *mut libc::pthread_t,
-    _attr: *const libc::pthread_attr_t,
+    native: *mut libc::pthread_t,
+    attr: *const libc::pthread_attr_t,
     _f: extern "C" fn(_: *mut libc::c_void) -> *mut libc::c_void,
-    _value: *mut libc::c_void,
+    value: *mut libc::c_void,
 ) -> libc::c_int {
-    1
+    let mut priority = 0;
+    ctru_sys::svcGetThreadPriority(&mut priority, 0xFFFF8000);
+
+    extern "C" fn thread_start(main: *mut libc::c_void) {
+        unsafe {
+            Box::from_raw(main as *mut Box<dyn FnOnce()>)();
+        }
+    }
+
+    let handle = ctru_sys::threadCreate(
+        Some(thread_start),
+        value,
+        *(attr as *mut ctru_sys::size_t),
+        priority,
+        -2,
+        false,
+    );
+
+    *native = handle as _;
+
+    0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_join(
-    _native: libc::pthread_t,
+    native: libc::pthread_t,
     _value: *mut *mut libc::c_void,
 ) -> libc::c_int {
-    1
+    ctru_sys::threadJoin(native as ctru_sys::Thread, u64::max_value());
+    ctru_sys::threadFree(native as ctru_sys::Thread);
+
+    0
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_detach(_thread: libc::pthread_t) -> libc::c_int {
-    1
+pub unsafe extern "C" fn pthread_detach(thread: libc::pthread_t) -> libc::c_int {
+    ctru_sys::threadDetach(thread as _);
+
+    0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_attr_init(_attr: *mut libc::pthread_attr_t) -> libc::c_int {
-    1
+    0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_attr_destroy(_attr: *mut libc::pthread_attr_t) -> libc::c_int {
-    1
+    0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_attr_setstacksize(
-    _attr: *mut libc::pthread_attr_t,
-    _stack_size: libc::size_t,
+    attr: *mut libc::pthread_attr_t,
+    stack_size: libc::size_t,
 ) -> libc::c_int {
-    1
+    let pointer = attr as *mut libc::size_t;
+    *pointer = stack_size;
+
+    0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn sched_yield() -> libc::c_int {
-    1
+    ctru_sys::svcSleepThread(0);
+
+    0
 }
 
 #[no_mangle]

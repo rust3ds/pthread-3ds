@@ -394,6 +394,15 @@ pub unsafe extern "C" fn pthread_rwlockattr_destroy(
     0
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn pthread_sigmask(
+    _how: ::libc::c_int,
+    _set: *const libc::sigset_t,
+    _oldset: *mut libc::sigset_t,
+) -> ::libc::c_int {
+    -1
+}
+
 // THREAD KEYS IMPLEMENTATION FOR RUST STD
 
 use spin::rwlock::RwLock;

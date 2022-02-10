@@ -9,3 +9,4 @@ edition = "2021"
 libc = "0.2.116"
 ctru-sys = { git = "https://github.com/Meziu/ctru-rs.git" }
 spin = { version = "0.9", default-features = false, features = ["rwlock", "std"] }
+static_assertions = "1.0"

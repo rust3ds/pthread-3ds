@@ -58,6 +58,8 @@ pub unsafe extern "C" fn pthread_create(
     if handle.is_null() {
         // There was some error, but libctru doesn't expose the result.
         // We assume there was an incorrect parameter (such as too low of a priority).
+        // We also need to clean up the closure at this time.
+        drop(Box::from_raw(main));
         return libc::EINVAL;
     }
 

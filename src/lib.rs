@@ -3,6 +3,8 @@
 #![allow(non_camel_case_types)]
 #![allow(clippy::missing_safety_doc)]
 
+use std::ptr;
+
 /// Call this somewhere to force Rust to link this module.
 /// The call doesn't need to execute, just exist.
 ///
@@ -15,26 +17,49 @@ pub fn init() {}
 pub unsafe extern "C" fn pthread_create(
     native: *mut libc::pthread_t,
     attr: *const libc::pthread_attr_t,
-    _f: extern "C" fn(_: *mut libc::c_void) -> *mut libc::c_void,
+    entrypoint: extern "C" fn(_: *mut libc::c_void) -> *mut libc::c_void,
     value: *mut libc::c_void,
 ) -> libc::c_int {
-    let mut priority = 0;
-    ctru_sys::svcGetThreadPriority(&mut priority, 0xFFFF8000);
+    let attr = attr as *const PThreadAttr;
+
+    let stack_size = (*attr).stack_size.unwrap_or(libc::PTHREAD_STACK_MIN) as ctru_sys::size_t;
+
+    // If no priority value is specified, spawn with the same
+    // priority as the parent thread
+    let priority = (*attr).priority.unwrap_or_else(|| pthread_getpriority());
+
+    // If no affinity is specified, spawn on the default core (determined by
+    // the application's Exheader)
+    let affinity = (*attr).affinity.unwrap_or(-2);
 
     extern "C" fn thread_start(main: *mut libc::c_void) {
         unsafe {
-            Box::from_raw(main as *mut Box<dyn FnOnce()>)();
+            Box::from_raw(main as *mut Box<dyn FnOnce() -> *mut libc::c_void>)();
         }
     }
 
+    // The closure needs a fat pointer (64 bits) to work since it captures a variable and is thus a
+    // trait object, but *mut void is only 32 bits. We need double indirection to pass along the
+    // full closure data.
+    // We make this closure in the first place because threadCreate expects a void return type, but
+    // entrypoint returns a pointer so the types are incompatible.
+    let main: *mut Box<dyn FnOnce() -> *mut libc::c_void> =
+        Box::into_raw(Box::new(Box::new(move || entrypoint(value))));
+
     let handle = ctru_sys::threadCreate(
         Some(thread_start),
-        value,
-        *(attr as *mut ctru_sys::size_t),
+        main as *mut libc::c_void,
+        stack_size,
         priority,
-        -2,
+        affinity,
         false,
     );
+
+    if handle.is_null() {
+        // There was some error, but libctru doesn't expose the result.
+        // We assume there was an incorrect parameter (such as too low of a priority).
+        return libc::EINVAL;
+    }
 
     *native = handle as _;
 
@@ -46,7 +71,7 @@ pub unsafe extern "C" fn pthread_join(
     native: libc::pthread_t,
     _value: *mut *mut libc::c_void,
 ) -> libc::c_int {
-    ctru_sys::threadJoin(native as ctru_sys::Thread, u64::max_value());
+    ctru_sys::threadJoin(native as ctru_sys::Thread, u64::MAX);
     ctru_sys::threadFree(native as ctru_sys::Thread);
 
     0
@@ -54,18 +79,46 @@ pub unsafe extern "C" fn pthread_join(
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_detach(thread: libc::pthread_t) -> libc::c_int {
-    ctru_sys::threadDetach(thread as _);
+    ctru_sys::threadDetach(thread as ctru_sys::Thread);
 
     0
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_attr_init(_attr: *mut libc::pthread_attr_t) -> libc::c_int {
+pub unsafe extern "C" fn pthread_getpriority() -> libc::c_int {
+    let mut priority = 0;
+    ctru_sys::svcGetThreadPriority(&mut priority, ctru_sys::CUR_THREAD_HANDLE);
+    priority
+}
+
+/// Internal struct for storing pthread attribute data
+/// Must be less than or equal to the size of `libc::pthread_attr_t`. We assert
+/// this below via static_assertions.
+struct PThreadAttr {
+    stack_size: Option<libc::size_t>,
+    priority: Option<libc::c_int>,
+    affinity: Option<libc::c_int>,
+}
+
+static_assertions::const_assert!(
+    std::mem::size_of::<PThreadAttr>() <= std::mem::size_of::<libc::pthread_attr_t>()
+);
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_init(attr: *mut libc::pthread_attr_t) -> libc::c_int {
+    let attr = attr as *mut PThreadAttr;
+    *attr = PThreadAttr {
+        stack_size: None,
+        priority: None,
+        affinity: None,
+    };
+
     0
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_attr_destroy(_attr: *mut libc::pthread_attr_t) -> libc::c_int {
+pub unsafe extern "C" fn pthread_attr_destroy(attr: *mut libc::pthread_attr_t) -> libc::c_int {
+    ptr::drop_in_place(attr as *mut PThreadAttr);
     0
 }
 
@@ -74,8 +127,30 @@ pub unsafe extern "C" fn pthread_attr_setstacksize(
     attr: *mut libc::pthread_attr_t,
     stack_size: libc::size_t,
 ) -> libc::c_int {
-    let pointer = attr as *mut libc::size_t;
-    *pointer = stack_size;
+    let attr = attr as *mut PThreadAttr;
+    (*attr).stack_size = Some(stack_size);
+
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_setpriority(
+    attr: *mut libc::pthread_attr_t,
+    priority: libc::c_int,
+) -> libc::c_int {
+    let attr = attr as *mut PThreadAttr;
+    (*attr).priority = Some(priority);
+
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_setaffinity(
+    attr: *mut libc::pthread_attr_t,
+    affinity: libc::c_int,
+) -> libc::c_int {
+    let attr = attr as *mut PThreadAttr;
+    (*attr).affinity = Some(affinity);
 
     0
 }
@@ -428,7 +503,6 @@ pub unsafe extern "C" fn pthread_rwlockattr_destroy(
 
 use spin::rwlock::RwLock;
 use std::collections::BTreeMap;
-use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 type Key = usize;

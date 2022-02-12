@@ -21,16 +21,9 @@ pub unsafe extern "C" fn pthread_create(
     value: *mut libc::c_void,
 ) -> libc::c_int {
     let attr = attr as *const PThreadAttr;
-
-    let stack_size = (*attr).stack_size.unwrap_or(libc::PTHREAD_STACK_MIN) as ctru_sys::size_t;
-
-    // If no priority value is specified, spawn with the same
-    // priority as the parent thread
-    let priority = (*attr).priority.unwrap_or_else(|| pthread_getpriority());
-
-    // If no affinity is specified, spawn on the default core (determined by
-    // the application's Exheader)
-    let affinity = (*attr).affinity.unwrap_or(-2);
+    let stack_size = (*attr).stack_size as ctru_sys::size_t;
+    let priority = (*attr).priority;
+    let affinity = (*attr).affinity;
 
     extern "C" fn thread_start(main: *mut libc::c_void) {
         unsafe {
@@ -97,9 +90,25 @@ pub unsafe extern "C" fn pthread_getpriority() -> libc::c_int {
 /// Must be less than or equal to the size of `libc::pthread_attr_t`. We assert
 /// this below via static_assertions.
 struct PThreadAttr {
-    stack_size: Option<libc::size_t>,
-    priority: Option<libc::c_int>,
-    affinity: Option<libc::c_int>,
+    stack_size: libc::size_t,
+    priority: libc::c_int,
+    affinity: libc::c_int,
+}
+
+impl Default for PThreadAttr {
+    fn default() -> Self {
+        PThreadAttr {
+            stack_size: libc::PTHREAD_STACK_MIN,
+
+            // If no priority value is specified, spawn with the same
+            // priority as the current thread
+            priority: unsafe { pthread_getpriority() },
+
+            // If no affinity is specified, spawn on the default core (determined by
+            // the application's Exheader)
+            affinity: -2,
+        }
+    }
 }
 
 static_assertions::const_assert!(
@@ -109,11 +118,7 @@ static_assertions::const_assert!(
 #[no_mangle]
 pub unsafe extern "C" fn pthread_attr_init(attr: *mut libc::pthread_attr_t) -> libc::c_int {
     let attr = attr as *mut PThreadAttr;
-    *attr = PThreadAttr {
-        stack_size: None,
-        priority: None,
-        affinity: None,
-    };
+    *attr = PThreadAttr::default();
 
     0
 }
@@ -130,18 +135,30 @@ pub unsafe extern "C" fn pthread_attr_setstacksize(
     stack_size: libc::size_t,
 ) -> libc::c_int {
     let attr = attr as *mut PThreadAttr;
-    (*attr).stack_size = Some(stack_size);
+    (*attr).stack_size = stack_size;
 
     0
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_attr_setpriority(
+pub unsafe extern "C" fn pthread_attr_getschedparam(
+    attr: *const libc::pthread_attr_t,
+    param: *mut libc::sched_param,
+) -> libc::c_int {
+    let attr = attr as *const PThreadAttr;
+    (*param).sched_priority = (*attr).priority;
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_setschedparam(
     attr: *mut libc::pthread_attr_t,
-    priority: libc::c_int,
+    param: *const libc::sched_param,
 ) -> libc::c_int {
     let attr = attr as *mut PThreadAttr;
-    (*attr).priority = Some(priority);
+    (*attr).priority = (*param).sched_priority;
+
+    // TODO: we could validate the priority here if we wanted?
 
     0
 }
@@ -152,7 +169,7 @@ pub unsafe extern "C" fn pthread_attr_setaffinity(
     affinity: libc::c_int,
 ) -> libc::c_int {
     let attr = attr as *mut PThreadAttr;
-    (*attr).affinity = Some(affinity);
+    (*attr).affinity = affinity;
 
     0
 }

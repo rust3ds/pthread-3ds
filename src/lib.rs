@@ -23,7 +23,7 @@ pub unsafe extern "C" fn pthread_create(
     let attr = attr as *const PThreadAttr;
     let stack_size = (*attr).stack_size as ctru_sys::size_t;
     let priority = (*attr).priority;
-    let affinity = (*attr).affinity;
+    let ideal_processor = (*attr).ideal_processor;
 
     extern "C" fn thread_start(main: *mut libc::c_void) {
         unsafe {
@@ -44,7 +44,7 @@ pub unsafe extern "C" fn pthread_create(
         main as *mut libc::c_void,
         stack_size,
         priority,
-        affinity,
+        ideal_processor,
         false,
     );
 
@@ -92,7 +92,7 @@ pub unsafe extern "C" fn pthread_getpriority() -> libc::c_int {
 struct PThreadAttr {
     stack_size: libc::size_t,
     priority: libc::c_int,
-    affinity: libc::c_int,
+    ideal_processor: libc::c_int,
 }
 
 impl Default for PThreadAttr {
@@ -104,9 +104,9 @@ impl Default for PThreadAttr {
             // priority as the current thread
             priority: unsafe { pthread_getpriority() },
 
-            // If no affinity is specified, spawn on the default core (determined by
-            // the application's Exheader)
-            affinity: -2,
+            // If no processor is specified, spawn on the default core.
+            // (determined by the application's Exheader)
+            ideal_processor: -2,
         }
     }
 }
@@ -164,12 +164,25 @@ pub unsafe extern "C" fn pthread_attr_setschedparam(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_attr_setaffinity(
-    attr: *mut libc::pthread_attr_t,
-    affinity: libc::c_int,
+pub unsafe extern "C" fn pthread_attr_getidealprocessor_np(
+    attr: *const libc::pthread_attr_t,
+    ideal_processor: *mut libc::c_int,
 ) -> libc::c_int {
     let attr = attr as *mut PThreadAttr;
-    (*attr).affinity = affinity;
+    (*ideal_processor) = (*attr).ideal_processor;
+
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_setidealprocessor_np(
+    attr: *mut libc::pthread_attr_t,
+    ideal_processor: libc::c_int,
+) -> libc::c_int {
+    let attr = attr as *mut PThreadAttr;
+    (*attr).ideal_processor = ideal_processor;
+
+    // TODO: we could validate the processor ID here if we wanted?
 
     0
 }

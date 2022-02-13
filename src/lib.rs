@@ -13,6 +13,9 @@ pub fn init() {}
 
 // PTHREAD LAYER TO CALL LIBCTRU
 
+/// The main thread's thread ID. It is "null" because libctru didn't spawn it.
+const MAIN_THREAD_ID: libc::pthread_t = 0;
+
 #[no_mangle]
 pub unsafe extern "C" fn pthread_create(
     native: *mut libc::pthread_t,
@@ -39,7 +42,7 @@ pub unsafe extern "C" fn pthread_create(
     let main: *mut Box<dyn FnOnce() -> *mut libc::c_void> =
         Box::into_raw(Box::new(Box::new(move || entrypoint(value))));
 
-    let handle = ctru_sys::threadCreate(
+    let thread = ctru_sys::threadCreate(
         Some(thread_start),
         main as *mut libc::c_void,
         stack_size,
@@ -48,7 +51,7 @@ pub unsafe extern "C" fn pthread_create(
         false,
     );
 
-    if handle.is_null() {
+    if thread.is_null() {
         // There was some error, but libctru doesn't expose the result.
         // We assume there was permissions issue (such as too low of a priority).
         // We also need to clean up the closure at this time.
@@ -56,7 +59,7 @@ pub unsafe extern "C" fn pthread_create(
         return libc::EPERM;
     }
 
-    *native = handle as _;
+    *native = thread as _;
 
     0
 }
@@ -66,7 +69,17 @@ pub unsafe extern "C" fn pthread_join(
     native: libc::pthread_t,
     _value: *mut *mut libc::c_void,
 ) -> libc::c_int {
-    ctru_sys::threadJoin(native as ctru_sys::Thread, u64::MAX);
+    if native == MAIN_THREAD_ID {
+        // This is not a valid thread to join on
+        return libc::EINVAL;
+    }
+
+    let result = ctru_sys::threadJoin(native as ctru_sys::Thread, u64::MAX);
+    if ctru_sys::R_FAILED(result) {
+        // TODO: improve the error code by checking the result further?
+        return libc::EINVAL;
+    }
+
     ctru_sys::threadFree(native as ctru_sys::Thread);
 
     0
@@ -74,9 +87,19 @@ pub unsafe extern "C" fn pthread_join(
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_detach(thread: libc::pthread_t) -> libc::c_int {
+    if native == MAIN_THREAD_ID {
+        // This is not a valid thread to detach
+        return libc::EINVAL;
+    }
+
     ctru_sys::threadDetach(thread as ctru_sys::Thread);
 
     0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_self() -> libc::pthread_t {
+    ctru_sys::threadGetCurrent() as libc::pthread_t
 }
 
 #[no_mangle]

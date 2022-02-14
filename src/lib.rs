@@ -13,6 +13,9 @@ pub fn init() {}
 
 // PTHREAD LAYER TO CALL LIBCTRU
 
+/// The main thread's thread ID. It is "null" because libctru didn't spawn it.
+const MAIN_THREAD_ID: libc::pthread_t = 0;
+
 #[no_mangle]
 pub unsafe extern "C" fn pthread_create(
     native: *mut libc::pthread_t,
@@ -21,16 +24,9 @@ pub unsafe extern "C" fn pthread_create(
     value: *mut libc::c_void,
 ) -> libc::c_int {
     let attr = attr as *const PThreadAttr;
-
-    let stack_size = (*attr).stack_size.unwrap_or(libc::PTHREAD_STACK_MIN) as ctru_sys::size_t;
-
-    // If no priority value is specified, spawn with the same
-    // priority as the parent thread
-    let priority = (*attr).priority.unwrap_or_else(|| pthread_getpriority());
-
-    // If no affinity is specified, spawn on the default core (determined by
-    // the application's Exheader)
-    let affinity = (*attr).affinity.unwrap_or(-2);
+    let stack_size = (*attr).stack_size as ctru_sys::size_t;
+    let priority = (*attr).priority;
+    let ideal_processor = (*attr).ideal_processor;
 
     extern "C" fn thread_start(main: *mut libc::c_void) {
         unsafe {
@@ -46,24 +42,24 @@ pub unsafe extern "C" fn pthread_create(
     let main: *mut Box<dyn FnOnce() -> *mut libc::c_void> =
         Box::into_raw(Box::new(Box::new(move || entrypoint(value))));
 
-    let handle = ctru_sys::threadCreate(
+    let thread = ctru_sys::threadCreate(
         Some(thread_start),
         main as *mut libc::c_void,
         stack_size,
         priority,
-        affinity,
+        ideal_processor,
         false,
     );
 
-    if handle.is_null() {
+    if thread.is_null() {
         // There was some error, but libctru doesn't expose the result.
-        // We assume there was an incorrect parameter (such as too low of a priority).
+        // We assume there was permissions issue (such as too low of a priority).
         // We also need to clean up the closure at this time.
         drop(Box::from_raw(main));
-        return libc::EINVAL;
+        return libc::EPERM;
     }
 
-    *native = handle as _;
+    *native = thread as _;
 
     0
 }
@@ -73,7 +69,17 @@ pub unsafe extern "C" fn pthread_join(
     native: libc::pthread_t,
     _value: *mut *mut libc::c_void,
 ) -> libc::c_int {
-    ctru_sys::threadJoin(native as ctru_sys::Thread, u64::MAX);
+    if native == MAIN_THREAD_ID {
+        // This is not a valid thread to join on
+        return libc::EINVAL;
+    }
+
+    let result = ctru_sys::threadJoin(native as ctru_sys::Thread, u64::MAX);
+    if ctru_sys::R_FAILED(result) {
+        // TODO: improve the error code by checking the result further?
+        return libc::EINVAL;
+    }
+
     ctru_sys::threadFree(native as ctru_sys::Thread);
 
     0
@@ -81,25 +87,163 @@ pub unsafe extern "C" fn pthread_join(
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_detach(thread: libc::pthread_t) -> libc::c_int {
+    if thread == MAIN_THREAD_ID {
+        // This is not a valid thread to detach
+        return libc::EINVAL;
+    }
+
     ctru_sys::threadDetach(thread as ctru_sys::Thread);
 
     0
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_getpriority() -> libc::c_int {
+pub unsafe extern "C" fn pthread_self() -> libc::pthread_t {
+    ctru_sys::threadGetCurrent() as libc::pthread_t
+}
+
+unsafe fn get_main_thread_handle() -> Result<ctru_sys::Handle, ctru_sys::Result> {
+    // Unfortunately I don't know of any better way to get the main thread's
+    // handle, other than via svcGetThreadList and svcOpenThread.
+    // Experimentally, the main thread ID is always the first in the list.
+    let mut thread_ids = [0; 1];
+    let mut thread_ids_count = 0;
+    let result = ctru_sys::svcGetThreadList(
+        &mut thread_ids_count,
+        thread_ids.as_mut_ptr(),
+        thread_ids.len() as i32,
+        ctru_sys::CUR_PROCESS_HANDLE,
+    );
+    if ctru_sys::R_FAILED(result) {
+        return Err(result);
+    }
+
+    // Get the main thread's handle
+    let main_thread_id = thread_ids[0];
+    let mut main_thread_handle = 0;
+    let result = ctru_sys::svcOpenThread(
+        &mut main_thread_handle,
+        ctru_sys::CUR_PROCESS_HANDLE,
+        main_thread_id,
+    );
+    if ctru_sys::R_FAILED(result) {
+        return Err(result);
+    }
+
+    Ok(main_thread_handle)
+}
+
+unsafe fn get_thread_handle(native: libc::pthread_t) -> Result<ctru_sys::Handle, ctru_sys::Result> {
+    if native == MAIN_THREAD_ID {
+        get_main_thread_handle()
+    } else {
+        Ok(ctru_sys::threadGetHandle(native as ctru_sys::Thread))
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_getschedparam(
+    native: libc::pthread_t,
+    policy: *mut libc::c_int,
+    param: *mut libc::sched_param,
+) -> libc::c_int {
+    let handle = match get_thread_handle(native) {
+        Ok(handle) => handle,
+        Err(_) => return libc::ESRCH,
+    };
+
+    if handle == u32::MAX {
+        // The thread has already finished
+        return libc::ESRCH;
+    }
+
     let mut priority = 0;
-    ctru_sys::svcGetThreadPriority(&mut priority, ctru_sys::CUR_THREAD_HANDLE);
-    priority
+    let result = ctru_sys::svcGetThreadPriority(&mut priority, handle);
+    if ctru_sys::R_FAILED(result) {
+        // Some error occurred. This is the only error defined for this
+        // function, so return it. Maybe the thread exited while this function
+        // was exiting?
+        return libc::ESRCH;
+    }
+
+    (*param).sched_priority = priority;
+
+    // SCHED_FIFO is closest to how the cooperative app core works, while
+    // SCHED_RR is closest to how the preemptive sys core works.
+    // However, we don't have an API to get the current processor ID of a chosen
+    // thread (only the current), so we just always return SCHED_FIFO.
+    (*policy) = libc::SCHED_FIFO;
+
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_setschedparam(
+    native: libc::pthread_t,
+    policy: libc::c_int,
+    param: *const libc::sched_param,
+) -> libc::c_int {
+    if policy != libc::SCHED_FIFO {
+        // We only accept SCHED_FIFO. See the note in pthread_getschedparam.
+        return libc::EINVAL;
+    }
+
+    let handle = match get_thread_handle(native) {
+        Ok(handle) => handle,
+        Err(_) => return libc::EINVAL,
+    };
+
+    if handle == u32::MAX {
+        // The thread has already finished
+        return libc::ESRCH;
+    }
+
+    let result = ctru_sys::svcSetThreadPriority(handle, (*param).sched_priority);
+    if ctru_sys::R_FAILED(result) {
+        // Probably the priority is out of the permissible bounds
+        // TODO: improve the error code by checking the result further?
+        return libc::EPERM;
+    }
+
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_getprocessorid_np() -> libc::c_int {
+    ctru_sys::svcGetProcessorID()
 }
 
 /// Internal struct for storing pthread attribute data
 /// Must be less than or equal to the size of `libc::pthread_attr_t`. We assert
 /// this below via static_assertions.
 struct PThreadAttr {
-    stack_size: Option<libc::size_t>,
-    priority: Option<libc::c_int>,
-    affinity: Option<libc::c_int>,
+    stack_size: libc::size_t,
+    priority: libc::c_int,
+    ideal_processor: libc::c_int,
+}
+
+impl Default for PThreadAttr {
+    fn default() -> Self {
+        let thread_id = unsafe { libc::pthread_self() };
+        let mut policy = 0;
+        let mut sched_param = libc::sched_param { sched_priority: 0 };
+
+        unsafe { libc::pthread_getschedparam(thread_id, &mut policy, &mut sched_param) };
+
+        let priority = sched_param.sched_priority;
+
+        PThreadAttr {
+            stack_size: libc::PTHREAD_STACK_MIN,
+
+            // If no priority value is specified, spawn with the same
+            // priority as the current thread
+            priority,
+
+            // If no processor is specified, spawn on the default core.
+            // (determined by the application's Exheader)
+            ideal_processor: -2,
+        }
+    }
 }
 
 static_assertions::const_assert!(
@@ -109,11 +253,7 @@ static_assertions::const_assert!(
 #[no_mangle]
 pub unsafe extern "C" fn pthread_attr_init(attr: *mut libc::pthread_attr_t) -> libc::c_int {
     let attr = attr as *mut PThreadAttr;
-    *attr = PThreadAttr {
-        stack_size: None,
-        priority: None,
-        affinity: None,
-    };
+    *attr = PThreadAttr::default();
 
     0
 }
@@ -130,29 +270,54 @@ pub unsafe extern "C" fn pthread_attr_setstacksize(
     stack_size: libc::size_t,
 ) -> libc::c_int {
     let attr = attr as *mut PThreadAttr;
-    (*attr).stack_size = Some(stack_size);
+    (*attr).stack_size = stack_size;
 
     0
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_attr_setpriority(
+pub unsafe extern "C" fn pthread_attr_getschedparam(
+    attr: *const libc::pthread_attr_t,
+    param: *mut libc::sched_param,
+) -> libc::c_int {
+    let attr = attr as *const PThreadAttr;
+    (*param).sched_priority = (*attr).priority;
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_setschedparam(
     attr: *mut libc::pthread_attr_t,
-    priority: libc::c_int,
+    param: *const libc::sched_param,
 ) -> libc::c_int {
     let attr = attr as *mut PThreadAttr;
-    (*attr).priority = Some(priority);
+    (*attr).priority = (*param).sched_priority;
+
+    // TODO: we could validate the priority here if we wanted?
 
     0
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_attr_setaffinity(
-    attr: *mut libc::pthread_attr_t,
-    affinity: libc::c_int,
+pub unsafe extern "C" fn pthread_attr_getidealprocessor_np(
+    attr: *const libc::pthread_attr_t,
+    ideal_processor: *mut libc::c_int,
 ) -> libc::c_int {
     let attr = attr as *mut PThreadAttr;
-    (*attr).affinity = Some(affinity);
+    (*ideal_processor) = (*attr).ideal_processor;
+
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_setidealprocessor_np(
+    attr: *mut libc::pthread_attr_t,
+    ideal_processor: libc::c_int,
+) -> libc::c_int {
+    let attr = attr as *mut PThreadAttr;
+    (*attr).ideal_processor = ideal_processor;
+
+    // TODO: we could validate the processor ID here if we wanted?
 
     0
 }

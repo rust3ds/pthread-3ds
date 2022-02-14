@@ -208,6 +208,11 @@ pub unsafe extern "C" fn pthread_setschedparam(
     0
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn pthread_getprocessorid_np() -> libc::c_int {
+    ctru_sys::svcGetProcessorID()
+}
+
 /// Internal struct for storing pthread attribute data
 /// Must be less than or equal to the size of `libc::pthread_attr_t`. We assert
 /// this below via static_assertions.

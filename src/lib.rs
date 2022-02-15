@@ -26,7 +26,7 @@ pub unsafe extern "C" fn pthread_create(
     let attr = attr as *const PThreadAttr;
     let stack_size = (*attr).stack_size as ctru_sys::size_t;
     let priority = (*attr).priority;
-    let ideal_processor = (*attr).ideal_processor;
+    let processor_id = (*attr).processor_id;
 
     extern "C" fn thread_start(main: *mut libc::c_void) {
         unsafe {
@@ -47,7 +47,7 @@ pub unsafe extern "C" fn pthread_create(
         main as *mut libc::c_void,
         stack_size,
         priority,
-        ideal_processor,
+        processor_id,
         false,
     );
 
@@ -219,7 +219,7 @@ pub unsafe extern "C" fn pthread_getprocessorid_np() -> libc::c_int {
 struct PThreadAttr {
     stack_size: libc::size_t,
     priority: libc::c_int,
-    ideal_processor: libc::c_int,
+    processor_id: libc::c_int,
 }
 
 impl Default for PThreadAttr {
@@ -241,7 +241,7 @@ impl Default for PThreadAttr {
 
             // If no processor is specified, spawn on the default core.
             // (determined by the application's Exheader)
-            ideal_processor: -2,
+            processor_id: -2,
         }
     }
 }
@@ -299,23 +299,23 @@ pub unsafe extern "C" fn pthread_attr_setschedparam(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_attr_getidealprocessor_np(
+pub unsafe extern "C" fn pthread_attr_getprocessorid_np(
     attr: *const libc::pthread_attr_t,
-    ideal_processor: *mut libc::c_int,
+    processor_id: *mut libc::c_int,
 ) -> libc::c_int {
     let attr = attr as *mut PThreadAttr;
-    (*ideal_processor) = (*attr).ideal_processor;
+    (*processor_id) = (*attr).processor_id;
 
     0
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_attr_setidealprocessor_np(
+pub unsafe extern "C" fn pthread_attr_setprocessorid_np(
     attr: *mut libc::pthread_attr_t,
-    ideal_processor: libc::c_int,
+    processor_id: libc::c_int,
 ) -> libc::c_int {
     let attr = attr as *mut PThreadAttr;
-    (*attr).ideal_processor = ideal_processor;
+    (*attr).processor_id = processor_id;
 
     // TODO: we could validate the processor ID here if we wanted?
 

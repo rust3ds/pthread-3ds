@@ -224,19 +224,16 @@ struct PThreadAttr {
 
 impl Default for PThreadAttr {
     fn default() -> Self {
-        let thread_id = unsafe { libc::pthread_self() };
-        let mut policy = 0;
-        let mut sched_param = libc::sched_param { sched_priority: 0 };
-
-        unsafe { libc::pthread_getschedparam(thread_id, &mut policy, &mut sched_param) };
-
-        let priority = sched_param.sched_priority;
+        // Note: we are ignoring the result here, but errors shouldn't occur
+        // since we're using a valid handle.
+        let mut priority = 0;
+        unsafe { ctru_sys::svcGetThreadPriority(&mut priority, ctru_sys::CUR_THREAD_HANDLE) };
 
         PThreadAttr {
             stack_size: libc::PTHREAD_STACK_MIN,
 
-            // If no priority value is specified, spawn with the same
-            // priority as the current thread
+            // If no priority value is specified, spawn with the same priority
+            // as the current thread
             priority,
 
             // If no processor is specified, spawn on the default core.

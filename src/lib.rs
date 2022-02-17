@@ -3,7 +3,12 @@
 #![allow(non_camel_case_types)]
 #![allow(clippy::missing_safety_doc)]
 
-use std::ptr;
+// TODO: should this crate be no_std? I don't think we actually use any std features...
+
+use core::mem::{self, MaybeUninit};
+use core::ptr;
+
+use static_assertions::const_assert;
 
 /// Call this somewhere to force Rust to link this module.
 /// The call doesn't need to execute, just exist.
@@ -13,8 +18,14 @@ pub fn init() {}
 
 // PTHREAD LAYER TO CALL LIBCTRU
 
-/// The main thread's thread ID. It is "null" because libctru didn't spawn it.
-const MAIN_THREAD_ID: libc::pthread_t = 0;
+#[derive(Clone, Debug)]
+#[repr(C)]
+struct PThread {
+    thread: ctru_sys::Thread,
+    os_thread: u32,
+}
+
+const_assert!(mem::size_of::<*mut PThread>() <= mem::size_of::<libc::pthread_t>());
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_create(
@@ -59,7 +70,21 @@ pub unsafe extern "C" fn pthread_create(
         return libc::EPERM;
     }
 
-    *native = thread as _;
+    let os_handle = ctru_sys::threadGetHandle(thread);
+    let mut os_thread = MaybeUninit::zeroed();
+
+    let res = ctru_sys::svcGetThreadId(os_thread.as_mut_ptr(), os_handle);
+    if ctru_sys::R_FAILED(res) {
+        // todo error handling...
+        return libc::EPERM;
+    }
+
+    let pthread = Box::new(PThread {
+        thread,
+        os_thread: os_thread.assume_init(),
+    });
+
+    *native = Box::into_raw(pthread) as _;
 
     0
 }
@@ -69,75 +94,64 @@ pub unsafe extern "C" fn pthread_join(
     native: libc::pthread_t,
     _value: *mut *mut libc::c_void,
 ) -> libc::c_int {
-    if native == MAIN_THREAD_ID {
-        // This is not a valid thread to join on
-        return libc::EINVAL;
-    }
+    let pthread = Box::from_raw(native as *mut PThread);
 
-    let result = ctru_sys::threadJoin(native as ctru_sys::Thread, u64::MAX);
+    let result = ctru_sys::threadJoin(pthread.thread, u64::MAX);
     if ctru_sys::R_FAILED(result) {
         // TODO: improve the error code by checking the result further?
         return libc::EINVAL;
     }
 
-    ctru_sys::threadFree(native as ctru_sys::Thread);
+    ctru_sys::threadFree(pthread.thread);
 
     0
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_detach(thread: libc::pthread_t) -> libc::c_int {
-    if thread == MAIN_THREAD_ID {
-        // This is not a valid thread to detach
-        return libc::EINVAL;
-    }
-
-    ctru_sys::threadDetach(thread as ctru_sys::Thread);
+pub unsafe extern "C" fn pthread_detach(native: libc::pthread_t) -> libc::c_int {
+    let pthread = Box::from_raw(native as *mut PThread);
+    ctru_sys::threadDetach(pthread.thread);
 
     0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_self() -> libc::pthread_t {
-    ctru_sys::threadGetCurrent() as libc::pthread_t
-}
+    let thread = ctru_sys::threadGetCurrent();
+    let mut os_thread = MaybeUninit::zeroed();
+    let res = ctru_sys::svcGetThreadId(os_thread.as_mut_ptr(), ctru_sys::CUR_THREAD_HANDLE);
 
-unsafe fn get_main_thread_handle() -> Result<ctru_sys::Handle, ctru_sys::Result> {
-    // Unfortunately I don't know of any better way to get the main thread's
-    // handle, other than via svcGetThreadList and svcOpenThread.
-    // Experimentally, the main thread ID is always the first in the list.
-    let mut thread_ids = [0; 1];
-    let mut thread_ids_count = 0;
-    let result = ctru_sys::svcGetThreadList(
-        &mut thread_ids_count,
-        thread_ids.as_mut_ptr(),
-        thread_ids.len() as i32,
-        ctru_sys::CUR_PROCESS_HANDLE,
-    );
-    if ctru_sys::R_FAILED(result) {
-        return Err(result);
+    if ctru_sys::R_FAILED(res) {
+        // todo err
+        ptr::null_mut::<PThread>() as libc::pthread_t
+    } else {
+        let pthread = Box::new(PThread {
+            thread,
+            os_thread: os_thread.assume_init(),
+        });
+
+        // TODO: this leaks, unless somewhere the caller joins or detaches
+        // the returned pthread_t ...
+        Box::into_raw(pthread) as libc::pthread_t
     }
-
-    // Get the main thread's handle
-    let main_thread_id = thread_ids[0];
-    let mut main_thread_handle = 0;
-    let result = ctru_sys::svcOpenThread(
-        &mut main_thread_handle,
-        ctru_sys::CUR_PROCESS_HANDLE,
-        main_thread_id,
-    );
-    if ctru_sys::R_FAILED(result) {
-        return Err(result);
-    }
-
-    Ok(main_thread_handle)
 }
 
 unsafe fn get_thread_handle(native: libc::pthread_t) -> Result<ctru_sys::Handle, ctru_sys::Result> {
-    if native == MAIN_THREAD_ID {
-        get_main_thread_handle()
+    // SAFETY:
+    // Clone the passed-in PThread to avoid a double-free when it gets joined or detached
+    let pthread = (&*(native as *const PThread)).clone();
+
+    let mut handle = MaybeUninit::zeroed();
+    let ret = ctru_sys::svcOpenThread(
+        handle.as_mut_ptr(),
+        ctru_sys::CUR_PROCESS_HANDLE,
+        pthread.os_thread,
+    );
+
+    if ctru_sys::R_FAILED(ret) {
+        Err(ret)
     } else {
-        Ok(ctru_sys::threadGetHandle(native as ctru_sys::Thread))
+        Ok(handle.assume_init())
     }
 }
 
@@ -216,6 +230,7 @@ pub unsafe extern "C" fn pthread_getprocessorid_np() -> libc::c_int {
 /// Internal struct for storing pthread attribute data
 /// Must be less than or equal to the size of `libc::pthread_attr_t`. We assert
 /// this below via static_assertions.
+#[repr(C)]
 struct PThreadAttr {
     stack_size: libc::size_t,
     priority: libc::c_int,
@@ -246,9 +261,7 @@ impl Default for PThreadAttr {
     }
 }
 
-static_assertions::const_assert!(
-    std::mem::size_of::<PThreadAttr>() <= std::mem::size_of::<libc::pthread_attr_t>()
-);
+const_assert!(mem::size_of::<PThreadAttr>() <= mem::size_of::<libc::pthread_attr_t>());
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_attr_init(attr: *mut libc::pthread_attr_t) -> libc::c_int {
@@ -514,7 +527,7 @@ fn init_rwlock(lock: *mut libc::pthread_rwlock_t) {
 
     unsafe {
         if !(*lock).initialized {
-            let mut attr = std::mem::MaybeUninit::<libc::pthread_mutexattr_t>::uninit();
+            let mut attr = MaybeUninit::<libc::pthread_mutexattr_t>::uninit();
             pthread_mutexattr_init(attr.as_mut_ptr());
             let mut attr = attr.assume_init();
             pthread_mutexattr_settype(&mut attr, libc::PTHREAD_MUTEX_NORMAL);

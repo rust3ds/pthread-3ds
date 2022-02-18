@@ -3,8 +3,6 @@
 #![allow(non_camel_case_types)]
 #![allow(clippy::missing_safety_doc)]
 
-// TODO: should this crate be no_std? I don't think we actually use any std features...
-
 use core::mem::{self, MaybeUninit};
 use core::ptr;
 
@@ -96,7 +94,7 @@ pub unsafe extern "C" fn pthread_create(
 
     let res = ctru_sys::svcGetThreadId(&mut os_thread, os_handle);
     if ctru_sys::R_FAILED(res) {
-        // todo error handling...
+        // TODO: improve error handling? Different codes?
         return libc::EPERM;
     }
 
@@ -144,7 +142,7 @@ pub unsafe extern "C" fn pthread_self() -> libc::pthread_t {
     let res = ctru_sys::svcGetThreadId(&mut os_thread, ctru_sys::CUR_THREAD_HANDLE);
 
     if ctru_sys::R_FAILED(res) {
-        // todo err
+        // TODO: some way to report error? This should probably normally never fail...
         ptr::null_mut::<PThread>() as libc::pthread_t
     } else {
         let pthread = Box::new(PThread { thread, os_thread });

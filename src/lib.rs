@@ -27,6 +27,9 @@ struct PThread {
 
 const_assert!(mem::size_of::<*mut PThread>() <= mem::size_of::<libc::pthread_t>());
 
+#[thread_local]
+static mut THREAD_SELF: Option<*mut PThread> = None;
+
 #[no_mangle]
 pub unsafe extern "C" fn pthread_create(
     native: *mut libc::pthread_t,
@@ -51,7 +54,25 @@ pub unsafe extern "C" fn pthread_create(
     // We make this closure in the first place because threadCreate expects a void return type, but
     // entrypoint returns a pointer so the types are incompatible.
     let main: *mut Box<dyn FnOnce() -> *mut libc::c_void> =
-        Box::into_raw(Box::new(Box::new(move || entrypoint(value))));
+        Box::into_raw(Box::new(Box::new(move || {
+            let ret = entrypoint(value);
+
+            // destruct the THREAD_SELF variable, if it was ever created
+            if let Some(p) = THREAD_SELF {
+                let _ = Box::from_raw(p);
+            }
+
+            // Destruct thread local values where possible. We can't guarantee destructors
+            // will run for all values, which is similar to other Unix-like platforms:
+            // https://doc.rust-lang.org/std/thread/struct.LocalKey.html#platform-specific-behavior
+            for (&key, &value) in &LOCALS {
+                if let Some(Some(destruct)) = KEYS.read().get(&key) {
+                    destruct(value);
+                }
+            }
+
+            ret
+        })));
 
     let thread = ctru_sys::threadCreate(
         Some(thread_start),
@@ -71,19 +92,16 @@ pub unsafe extern "C" fn pthread_create(
     }
 
     let os_handle = ctru_sys::threadGetHandle(thread);
-    let mut os_thread = MaybeUninit::zeroed();
+    let mut os_thread = 0;
 
-    let res = ctru_sys::svcGetThreadId(os_thread.as_mut_ptr(), os_handle);
+    let res = ctru_sys::svcGetThreadId(&mut os_thread, os_handle);
     if ctru_sys::R_FAILED(res) {
         // todo error handling...
         return libc::EPERM;
     }
 
-    let pthread = Box::new(PThread {
-        thread,
-        os_thread: os_thread.assume_init(),
-    });
-
+    let pthread = Box::new(PThread { thread, os_thread });
+    // This pthread struct gets freed when the thread is joined or detached.
     *native = Box::into_raw(pthread) as _;
 
     0
@@ -117,22 +135,22 @@ pub unsafe extern "C" fn pthread_detach(native: libc::pthread_t) -> libc::c_int 
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_self() -> libc::pthread_t {
+    if let Some(thread) = THREAD_SELF {
+        return thread as libc::pthread_t;
+    }
+
     let thread = ctru_sys::threadGetCurrent();
-    let mut os_thread = MaybeUninit::zeroed();
-    let res = ctru_sys::svcGetThreadId(os_thread.as_mut_ptr(), ctru_sys::CUR_THREAD_HANDLE);
+    let mut os_thread = 0;
+    let res = ctru_sys::svcGetThreadId(&mut os_thread, ctru_sys::CUR_THREAD_HANDLE);
 
     if ctru_sys::R_FAILED(res) {
         // todo err
         ptr::null_mut::<PThread>() as libc::pthread_t
     } else {
-        let pthread = Box::new(PThread {
-            thread,
-            os_thread: os_thread.assume_init(),
-        });
-
-        // TODO: this leaks, unless somewhere the caller joins or detaches
-        // the returned pthread_t ...
-        Box::into_raw(pthread) as libc::pthread_t
+        let pthread = Box::new(PThread { thread, os_thread });
+        let raw = Box::into_raw(pthread);
+        THREAD_SELF = Some(raw);
+        raw as libc::pthread_t
     }
 }
 
@@ -141,17 +159,13 @@ unsafe fn get_thread_handle(native: libc::pthread_t) -> Result<ctru_sys::Handle,
     // Clone the passed-in PThread to avoid a double-free when it gets joined or detached
     let pthread = (&*(native as *const PThread)).clone();
 
-    let mut handle = MaybeUninit::zeroed();
-    let ret = ctru_sys::svcOpenThread(
-        handle.as_mut_ptr(),
-        ctru_sys::CUR_PROCESS_HANDLE,
-        pthread.os_thread,
-    );
+    let mut handle = 0;
+    let ret = ctru_sys::svcOpenThread(&mut handle, ctru_sys::CUR_PROCESS_HANDLE, pthread.os_thread);
 
     if ctru_sys::R_FAILED(ret) {
         Err(ret)
     } else {
-        Ok(handle.assume_init())
+        Ok(handle)
     }
 }
 

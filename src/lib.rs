@@ -152,18 +152,45 @@ pub unsafe extern "C" fn pthread_self() -> libc::pthread_t {
     }
 }
 
-unsafe fn get_thread_handle(native: libc::pthread_t) -> Result<ctru_sys::Handle, ctru_sys::Result> {
-    // SAFETY:
-    // Clone the passed-in PThread to avoid a double-free when it gets joined or detached
-    let pthread = (&*(native as *const PThread)).clone();
+struct Handle(ctru_sys::Handle);
 
-    let mut handle = 0;
-    let ret = ctru_sys::svcOpenThread(&mut handle, ctru_sys::CUR_PROCESS_HANDLE, pthread.os_thread);
+impl Handle {
+    fn is_valid(&self) -> bool {
+        self.0 != u32::MAX
+    }
+}
 
-    if ctru_sys::R_FAILED(ret) {
-        Err(ret)
-    } else {
-        Ok(handle)
+impl TryFrom<libc::pthread_t> for Handle {
+    type Error = ctru_sys::Result;
+
+    fn try_from(native: libc::pthread_t) -> Result<Self, Self::Error> {
+        // SAFETY:
+        // Clone the passed-in PThread to avoid a double-free when it gets joined or detached
+        unsafe {
+            let pthread = (&*(native as *const PThread)).clone();
+
+            let mut handle = 0;
+            let ret = ctru_sys::svcOpenThread(
+                &mut handle,
+                ctru_sys::CUR_PROCESS_HANDLE,
+                pthread.os_thread,
+            );
+
+            if ctru_sys::R_FAILED(ret) {
+                Err(ret)
+            } else {
+                Ok(Self(handle))
+            }
+        }
+    }
+}
+
+impl Drop for Handle {
+    fn drop(&mut self) {
+        unsafe {
+            let res = ctru_sys::svcCloseHandle(self.0);
+            assert!(ctru_sys::R_SUCCEEDED(res), "{:#X}", res);
+        }
     }
 }
 
@@ -173,18 +200,18 @@ pub unsafe extern "C" fn pthread_getschedparam(
     policy: *mut libc::c_int,
     param: *mut libc::sched_param,
 ) -> libc::c_int {
-    let handle = match get_thread_handle(native) {
+    let handle = match Handle::try_from(native) {
         Ok(handle) => handle,
         Err(_) => return libc::ESRCH,
     };
 
-    if handle == u32::MAX {
+    if !handle.is_valid() {
         // The thread has already finished
         return libc::ESRCH;
     }
 
     let mut priority = 0;
-    let result = ctru_sys::svcGetThreadPriority(&mut priority, handle);
+    let result = ctru_sys::svcGetThreadPriority(&mut priority, handle.0);
     if ctru_sys::R_FAILED(result) {
         // Some error occurred. This is the only error defined for this
         // function, so return it. Maybe the thread exited while this function
@@ -214,17 +241,17 @@ pub unsafe extern "C" fn pthread_setschedparam(
         return libc::EINVAL;
     }
 
-    let handle = match get_thread_handle(native) {
+    let handle = match Handle::try_from(native) {
         Ok(handle) => handle,
         Err(_) => return libc::EINVAL,
     };
 
-    if handle == u32::MAX {
+    if !handle.is_valid() {
         // The thread has already finished
         return libc::ESRCH;
     }
 
-    let result = ctru_sys::svcSetThreadPriority(handle, (*param).sched_priority);
+    let result = ctru_sys::svcSetThreadPriority(handle.0, (*param).sched_priority);
     if ctru_sys::R_FAILED(result) {
         // Probably the priority is out of the permissible bounds
         // TODO: improve the error code by checking the result further?

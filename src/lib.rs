@@ -57,7 +57,7 @@ pub unsafe extern "C" fn pthread_create(
 
             // destruct the THREAD_SELF variable, if it was ever created
             if let Some(p) = THREAD_SELF {
-                let _ = Box::from_raw(p);
+                drop(Box::from_raw(p));
             }
 
             // Destruct thread local values where possible. We can't guarantee destructors

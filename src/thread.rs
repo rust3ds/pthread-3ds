@@ -29,20 +29,26 @@ static mut THREAD_ID: libc::pthread_t = MAIN_THREAD_ID;
 
 #[derive(Copy, Clone)]
 struct PThread {
-    thread: SendableThreadPtr,
+    thread: SendPtr<ctru_sys::Thread_tag>,
     os_thread_id: u32,
     is_detached: bool,
     is_finished: bool,
-    result: *mut libc::c_void,
+    result: SendPtr<libc::c_void>,
 }
 
-/// Pointers are not Send (though it's really just a lint). But we want to share
-/// the `ctru_sys::Thread` pointer types in the global THREADS map. This struct
-/// lets us ignore that "lint".
-#[derive(Copy, Clone)]
-struct SendableThreadPtr(ctru_sys::Thread);
-unsafe impl Send for SendableThreadPtr {}
-unsafe impl Sync for SendableThreadPtr {}
+/// Pointers are not Send, though it's really just a lint. This struct lets us
+/// ignore that "lint".
+struct SendPtr<T>(*mut T);
+unsafe impl<T> Send for SendPtr<T> {}
+unsafe impl<T> Sync for SendPtr<T> {}
+
+// We can't use the derives because they add an unnecessary T: Copy/Clone bound.
+impl<T> Copy for SendPtr<T> {}
+impl<T> Clone for SendPtr<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_create(
@@ -83,7 +89,7 @@ pub unsafe extern "C" fn pthread_create(
         let mut thread_map = THREADS.write();
         if let Some(mut pthread) = thread_map.get_mut(&thread_id) {
             pthread.is_finished = true;
-            pthread.result = result;
+            pthread.result.0 = result;
 
             if pthread.is_detached {
                 // libctru will call threadFree once this thread dies
@@ -122,11 +128,11 @@ pub unsafe extern "C" fn pthread_create(
     THREADS.write().insert(
         thread_id,
         PThread {
-            thread: SendableThreadPtr(thread),
+            thread: SendPtr(thread),
             os_thread_id,
             is_detached: false,
             is_finished: false,
-            result: ptr::null_mut(),
+            result: SendPtr(ptr::null_mut()),
         },
     );
 
@@ -171,7 +177,7 @@ pub unsafe extern "C" fn pthread_join(
     // This should always be Some, but we use an if let just in case.
     if let Some(thread_data) = thread_data {
         if !return_value.is_null() {
-            *return_value = thread_data.result;
+            *return_value = thread_data.result.0;
         }
     }
 
@@ -226,11 +232,11 @@ pub unsafe extern "C" fn pthread_self() -> libc::pthread_t {
             PThread {
                 // This null pointer is safe because we return before ever using
                 // it (in pthread_join and pthread_detach).
-                thread: SendableThreadPtr(ptr::null_mut()),
+                thread: SendPtr(ptr::null_mut()),
                 os_thread_id,
                 is_detached: true,
                 is_finished: false,
-                result: ptr::null_mut(),
+                result: SendPtr(ptr::null_mut()),
             },
         );
     }

@@ -29,22 +29,22 @@ static mut THREAD_ID: libc::pthread_t = MAIN_THREAD_ID;
 
 #[derive(Copy, Clone)]
 struct PThread {
-    thread: SendPtr<ctru_sys::Thread_tag>,
+    thread: ShareablePtr<ctru_sys::Thread_tag>,
     os_thread_id: u32,
     is_detached: bool,
     is_finished: bool,
-    result: SendPtr<libc::c_void>,
+    result: ShareablePtr<libc::c_void>,
 }
 
-/// Pointers are not Send, though it's really just a lint. This struct lets us
-/// ignore that "lint".
-struct SendPtr<T>(*mut T);
-unsafe impl<T> Send for SendPtr<T> {}
-unsafe impl<T> Sync for SendPtr<T> {}
+/// Pointers are not Send or Sync, though it's really just a lint. This struct
+/// lets us ignore that "lint".
+struct ShareablePtr<T>(*mut T);
+unsafe impl<T> Send for ShareablePtr<T> {}
+unsafe impl<T> Sync for ShareablePtr<T> {}
 
 // We can't use the derives because they add an unnecessary T: Copy/Clone bound.
-impl<T> Copy for SendPtr<T> {}
-impl<T> Clone for SendPtr<T> {
+impl<T> Copy for ShareablePtr<T> {}
+impl<T> Clone for ShareablePtr<T> {
     fn clone(&self) -> Self {
         *self
     }
@@ -128,11 +128,11 @@ pub unsafe extern "C" fn pthread_create(
     THREADS.write().insert(
         thread_id,
         PThread {
-            thread: SendPtr(thread),
+            thread: ShareablePtr(thread),
             os_thread_id,
             is_detached: false,
             is_finished: false,
-            result: SendPtr(ptr::null_mut()),
+            result: ShareablePtr(ptr::null_mut()),
         },
     );
 
@@ -232,11 +232,11 @@ pub unsafe extern "C" fn pthread_self() -> libc::pthread_t {
             PThread {
                 // This null pointer is safe because we return before ever using
                 // it (in pthread_join and pthread_detach).
-                thread: SendPtr(ptr::null_mut()),
+                thread: ShareablePtr(ptr::null_mut()),
                 os_thread_id,
                 is_detached: true,
                 is_finished: false,
-                result: SendPtr(ptr::null_mut()),
+                result: ShareablePtr(ptr::null_mut()),
             },
         );
     }

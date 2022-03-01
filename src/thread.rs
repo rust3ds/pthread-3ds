@@ -1,6 +1,10 @@
 //! PThread threads implemented using libctru.
 
 use attr::PThreadAttr;
+use spin::rwlock::RwLock;
+use std::collections::BTreeMap;
+use std::ptr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 mod attr;
 
@@ -8,8 +12,37 @@ pub fn init() {
     attr::init();
 }
 
-/// The main thread's thread ID. It is "null" because libctru didn't spawn it.
+/// The main thread's pthread ID
 const MAIN_THREAD_ID: libc::pthread_t = 0;
+
+// We initialize to 1 since 0 is reserved for the main thread.
+static NEXT_ID: AtomicUsize = AtomicUsize::new(1);
+
+// This is a spin-lock RwLock which yields the thread every loop.
+static THREADS: RwLock<BTreeMap<libc::pthread_t, PThread>, spin::Yield> =
+    RwLock::new(BTreeMap::new());
+
+// Initialize to zero (main thread ID) since the main thread will have the
+// default value in this thread local.
+#[thread_local]
+static mut THREAD_ID: libc::pthread_t = MAIN_THREAD_ID;
+
+#[derive(Copy, Clone)]
+struct PThread {
+    thread: SendableThreadPtr,
+    os_thread_id: u32,
+    is_detached: bool,
+    is_finished: bool,
+    result: *mut libc::c_void,
+}
+
+/// Pointers are not Send (though it's really just a lint). But we want to share
+/// the `ctru_sys::Thread` pointer types in the global THREADS map. This struct
+/// lets us ignore that "lint".
+#[derive(Copy, Clone)]
+struct SendableThreadPtr(ctru_sys::Thread);
+unsafe impl Send for SendableThreadPtr {}
+unsafe impl Sync for SendableThreadPtr {}
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_create(
@@ -23,9 +56,11 @@ pub unsafe extern "C" fn pthread_create(
     let priority = (*attr).priority;
     let processor_id = (*attr).processor_id;
 
+    let thread_id = NEXT_ID.fetch_add(1, Ordering::SeqCst) as libc::pthread_t;
+
     extern "C" fn thread_start(main: *mut libc::c_void) {
         unsafe {
-            Box::from_raw(main as *mut Box<dyn FnOnce() -> *mut libc::c_void>)();
+            Box::from_raw(main as *mut Box<dyn FnOnce()>)();
         }
     }
 
@@ -34,8 +69,28 @@ pub unsafe extern "C" fn pthread_create(
     // full closure data.
     // We make this closure in the first place because threadCreate expects a void return type, but
     // entrypoint returns a pointer so the types are incompatible.
-    let main: *mut Box<dyn FnOnce() -> *mut libc::c_void> =
-        Box::into_raw(Box::new(Box::new(move || entrypoint(value))));
+    let main: *mut Box<dyn FnOnce()> = Box::into_raw(Box::new(Box::new(move || {
+        THREAD_ID = thread_id;
+
+        let result = entrypoint(value);
+
+        // Update the threads map with the result, and remove this thread if
+        // it's detached.
+        // We hold the lock the whole time so there isn't a race condition.
+        // (ex. we copy out the thread data, pthread_detach is called, we
+        // check is_detached and it's still false, so thread is never
+        // removed from the map)
+        let mut thread_map = THREADS.write();
+        if let Some(mut pthread) = thread_map.get_mut(&thread_id) {
+            pthread.is_finished = true;
+            pthread.result = result;
+
+            if pthread.is_detached {
+                // libctru will call threadFree once this thread dies
+                thread_map.remove(&thread_id);
+            }
+        }
+    })));
 
     let thread = ctru_sys::threadCreate(
         Some(thread_start),
@@ -54,106 +109,191 @@ pub unsafe extern "C" fn pthread_create(
         return libc::EPERM;
     }
 
-    *native = thread as _;
+    // Get the OS thread ID
+    let os_handle = ctru_sys::threadGetHandle(thread);
+    let mut os_thread_id = 0;
+    let result = ctru_sys::svcGetThreadId(&mut os_thread_id, os_handle);
+    if ctru_sys::R_FAILED(result) {
+        // TODO: improve error handling? Different codes?
+        return libc::EPERM;
+    }
+
+    // Insert the thread into our map
+    THREADS.write().insert(
+        thread_id,
+        PThread {
+            thread: SendableThreadPtr(thread),
+            os_thread_id,
+            is_detached: false,
+            is_finished: false,
+            result: ptr::null_mut(),
+        },
+    );
+
+    *native = thread_id;
 
     0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_join(
-    native: libc::pthread_t,
-    _value: *mut *mut libc::c_void,
+    thread_id: libc::pthread_t,
+    return_value: *mut *mut libc::c_void,
 ) -> libc::c_int {
-    if native == MAIN_THREAD_ID {
+    if thread_id == MAIN_THREAD_ID {
         // This is not a valid thread to join on
         return libc::EINVAL;
     }
 
-    let result = ctru_sys::threadJoin(native as ctru_sys::Thread, u64::MAX);
+    let thread_map = THREADS.read();
+    let Some(&pthread) = thread_map.get(&thread_id) else {
+        // This is not a valid thread ID
+        return libc::ESRCH
+    };
+    // We need to drop our read guard so it doesn't stay locked while joining
+    // the thread.
+    drop(thread_map);
+
+    if pthread.is_detached {
+        // Cannot join on a detached thread
+        return libc::EINVAL;
+    }
+
+    let result = ctru_sys::threadJoin(pthread.thread.0, u64::MAX);
     if ctru_sys::R_FAILED(result) {
         // TODO: improve the error code by checking the result further?
         return libc::EINVAL;
     }
 
-    ctru_sys::threadFree(native as ctru_sys::Thread);
+    ctru_sys::threadFree(pthread.thread.0);
+    let thread_data = THREADS.write().remove(&thread_id);
+
+    // This should always be Some, but we use an if let just in case.
+    if let Some(thread_data) = thread_data {
+        if !return_value.is_null() {
+            *return_value = thread_data.result;
+        }
+    }
 
     0
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_detach(thread: libc::pthread_t) -> libc::c_int {
-    if thread == MAIN_THREAD_ID {
+pub unsafe extern "C" fn pthread_detach(thread_id: libc::pthread_t) -> libc::c_int {
+    if thread_id == MAIN_THREAD_ID {
         // This is not a valid thread to detach
         return libc::EINVAL;
     }
 
-    ctru_sys::threadDetach(thread as ctru_sys::Thread);
+    let mut thread_map = THREADS.write();
+    let Some(mut pthread) = thread_map.get_mut(&thread_id) else {
+        // This is not a valid thread ID
+        return libc::ESRCH
+    };
+
+    if pthread.is_detached {
+        // Cannot detach an already detached thread
+        return libc::EINVAL;
+    }
+
+    pthread.is_detached = true;
+    ctru_sys::threadDetach(pthread.thread.0);
+
+    if pthread.is_finished {
+        // threadFree was already called by threadDetach
+        thread_map.remove(&thread_id);
+    }
 
     0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_self() -> libc::pthread_t {
-    ctru_sys::threadGetCurrent() as libc::pthread_t
-}
+    let thread_id = THREAD_ID;
 
-unsafe fn get_main_thread_handle() -> Result<ctru_sys::Handle, ctru_sys::Result> {
-    // Unfortunately I don't know of any better way to get the main thread's
-    // handle, other than via svcGetThreadList and svcOpenThread.
-    // Experimentally, the main thread ID is always the first in the list.
-    let mut thread_ids = [0; 1];
-    let mut thread_ids_count = 0;
-    let result = ctru_sys::svcGetThreadList(
-        &mut thread_ids_count,
-        thread_ids.as_mut_ptr(),
-        thread_ids.len() as i32,
-        ctru_sys::CUR_PROCESS_HANDLE,
-    );
-    if ctru_sys::R_FAILED(result) {
-        return Err(result);
+    if thread_id == MAIN_THREAD_ID {
+        // Take this opportunity to populate the main thread's data in the map.
+        // They can only "legally" get the main thread's ID by calling this
+        // function, so this will run before they do anything that needs this.
+
+        // We have to ignore the possible error from svcGetThreadId since
+        // pthread_self cannot fail... But there shouldn't be an error anyways.
+        let mut os_thread_id = 0;
+        ctru_sys::svcGetThreadId(&mut os_thread_id, ctru_sys::CUR_THREAD_HANDLE);
+
+        THREADS.write().insert(
+            MAIN_THREAD_ID,
+            PThread {
+                // This null pointer is safe because we return before ever using
+                // it (in pthread_join and pthread_detach).
+                thread: SendableThreadPtr(ptr::null_mut()),
+                os_thread_id,
+                is_detached: true,
+                is_finished: false,
+                result: ptr::null_mut(),
+            },
+        );
     }
 
-    // Get the main thread's handle
-    let main_thread_id = thread_ids[0];
-    let mut main_thread_handle = 0;
-    let result = ctru_sys::svcOpenThread(
-        &mut main_thread_handle,
-        ctru_sys::CUR_PROCESS_HANDLE,
-        main_thread_id,
-    );
-    if ctru_sys::R_FAILED(result) {
-        return Err(result);
-    }
-
-    Ok(main_thread_handle)
+    thread_id
 }
 
-unsafe fn get_thread_handle(native: libc::pthread_t) -> Result<ctru_sys::Handle, ctru_sys::Result> {
-    if native == MAIN_THREAD_ID {
-        get_main_thread_handle()
-    } else {
-        Ok(ctru_sys::threadGetHandle(native as ctru_sys::Thread))
+/// Closes a kernel handle on drop.
+struct Handle(ctru_sys::Handle);
+
+impl TryFrom<libc::pthread_t> for Handle {
+    type Error = libc::c_int;
+
+    fn try_from(thread_id: libc::pthread_t) -> Result<Self, Self::Error> {
+        let Some(&pthread) = THREADS.read().get(&thread_id) else {
+            // This is not a valid thread ID
+            return Err(libc::ESRCH)
+        };
+
+        if pthread.is_finished {
+            return Err(libc::ESRCH);
+        }
+
+        let mut os_handle = 0;
+        let ret = unsafe {
+            ctru_sys::svcOpenThread(
+                &mut os_handle,
+                ctru_sys::CUR_PROCESS_HANDLE,
+                pthread.os_thread_id,
+            )
+        };
+
+        if ctru_sys::R_FAILED(ret) || os_handle == u32::MAX {
+            // Either there was an error or the thread already finished
+            Err(libc::ESRCH)
+        } else {
+            Ok(Self(os_handle))
+        }
+    }
+}
+
+impl Drop for Handle {
+    fn drop(&mut self) {
+        unsafe {
+            // We ignore the error because we can't return it or panic.
+            ctru_sys::svcCloseHandle(self.0);
+        }
     }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_getschedparam(
-    native: libc::pthread_t,
+    thread_id: libc::pthread_t,
     policy: *mut libc::c_int,
     param: *mut libc::sched_param,
 ) -> libc::c_int {
-    let handle = match get_thread_handle(native) {
+    let handle = match Handle::try_from(thread_id) {
         Ok(handle) => handle,
-        Err(_) => return libc::ESRCH,
+        Err(code) => return code,
     };
 
-    if handle == u32::MAX {
-        // The thread has already finished
-        return libc::ESRCH;
-    }
-
     let mut priority = 0;
-    let result = ctru_sys::svcGetThreadPriority(&mut priority, handle);
+    let result = ctru_sys::svcGetThreadPriority(&mut priority, handle.0);
     if ctru_sys::R_FAILED(result) {
         // Some error occurred. This is the only error defined for this
         // function, so return it. Maybe the thread exited while this function
@@ -174,7 +314,7 @@ pub unsafe extern "C" fn pthread_getschedparam(
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_setschedparam(
-    native: libc::pthread_t,
+    thread_id: libc::pthread_t,
     policy: libc::c_int,
     param: *const libc::sched_param,
 ) -> libc::c_int {
@@ -183,17 +323,12 @@ pub unsafe extern "C" fn pthread_setschedparam(
         return libc::EINVAL;
     }
 
-    let handle = match get_thread_handle(native) {
+    let handle = match Handle::try_from(thread_id) {
         Ok(handle) => handle,
-        Err(_) => return libc::EINVAL,
+        Err(code) => return code,
     };
 
-    if handle == u32::MAX {
-        // The thread has already finished
-        return libc::ESRCH;
-    }
-
-    let result = ctru_sys::svcSetThreadPriority(handle, (*param).sched_priority);
+    let result = ctru_sys::svcSetThreadPriority(handle.0, (*param).sched_priority);
     if ctru_sys::R_FAILED(result) {
         // Probably the priority is out of the permissible bounds
         // TODO: improve the error code by checking the result further?

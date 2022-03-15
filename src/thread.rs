@@ -6,11 +6,9 @@ use std::collections::BTreeMap;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-mod attr;
+pub mod attr;
 
-pub fn init() {
-    attr::init();
-}
+pub fn init() {}
 
 /// The main thread's pthread ID
 const MAIN_THREAD_ID: libc::pthread_t = 0;

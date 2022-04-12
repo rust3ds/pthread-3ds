@@ -82,3 +82,38 @@ pub unsafe extern "C" fn pthread_cond_timedwait(
 pub unsafe extern "C" fn pthread_cond_destroy(_cond: *mut libc::pthread_cond_t) -> libc::c_int {
     0
 }
+
+#[no_mangle]
+pub extern "C" fn pthread_condattr_init(_attr: *const libc::pthread_condattr_t) -> libc::c_int {
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn pthread_condattr_destroy(_attr: *const libc::pthread_condattr_t) -> libc::c_int {
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn pthread_condattr_getclock(
+    _attr: *const libc::pthread_condattr_t,
+    clock_id: *mut libc::clockid_t,
+) -> libc::c_int {
+    unsafe {
+        *clock_id = libc::CLOCK_REALTIME;
+    }
+
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn pthread_condattr_setclock(
+    _attr: *mut libc::pthread_condattr_t,
+    clock_id: libc::clockid_t,
+) -> libc::c_int {
+    // only one clock is supported, so all other options are considered an error
+    if clock_id == libc::CLOCK_REALTIME {
+        0
+    } else {
+        libc::EINVAL
+    }
+}

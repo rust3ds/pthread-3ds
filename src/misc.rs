@@ -17,3 +17,12 @@ pub unsafe extern "C" fn pthread_sigmask(
 ) -> ::libc::c_int {
     -1
 }
+
+#[no_mangle]
+pub extern "C" fn pthread_atfork(
+    _prepare: Option<unsafe extern "C" fn()>,
+    _parent: Option<unsafe extern "C" fn()>,
+    _child: Option<unsafe extern "C" fn()>,
+) -> libc::c_int {
+    0
+}

@@ -14,7 +14,7 @@ mod thread_keys;
 /// Call this somewhere to force Rust to link this module.
 /// The call doesn't need to execute, just exist.
 ///
-/// See https://github.com/rust-lang/rust/issues/47384
+/// See <https://github.com/rust-lang/rust/issues/47384>
 #[inline(always)]
 pub fn init() {
     condvar::init();

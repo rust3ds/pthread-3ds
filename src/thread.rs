@@ -223,7 +223,7 @@ pub unsafe extern "C" fn pthread_self() -> libc::pthread_t {
         // We have to ignore the possible error from svcGetThreadId since
         // pthread_self cannot fail... But there shouldn't be an error anyways.
         let mut os_thread_id = 0;
-        ctru_sys::svcGetThreadId(&mut os_thread_id, ctru_sys::CUR_THREAD_HANDLE);
+        let _ = ctru_sys::svcGetThreadId(&mut os_thread_id, ctru_sys::CUR_THREAD_HANDLE);
 
         THREADS.write().insert(
             MAIN_THREAD_ID,
@@ -280,7 +280,7 @@ impl Drop for Handle {
     fn drop(&mut self) {
         unsafe {
             // We ignore the error because we can't return it or panic.
-            ctru_sys::svcCloseHandle(self.0);
+            let _ = ctru_sys::svcCloseHandle(self.0);
         }
     }
 }

@@ -56,7 +56,7 @@ pub unsafe extern "C" fn pthread_create(
     value: *mut libc::c_void,
 ) -> libc::c_int {
     let attr = attr as *const PThreadAttr;
-    let stack_size = (*attr).stack_size as ctru_sys::size_t;
+    let stack_size = (*attr).stack_size;
     let priority = (*attr).priority;
     let processor_id = (*attr).processor_id;
 

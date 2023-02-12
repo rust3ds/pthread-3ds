@@ -1,6 +1,4 @@
 #![feature(thread_local)]
-#![feature(const_btree_new)]
-#![feature(let_else)]
 #![allow(non_camel_case_types)]
 #![allow(clippy::missing_safety_doc)]
 

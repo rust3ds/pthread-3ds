@@ -9,17 +9,6 @@ mod rwlock;
 mod thread;
 mod thread_keys;
 
-/// Call this somewhere to force Rust to link this module.
-/// The call doesn't need to execute, just exist.
-///
-/// See <https://github.com/rust-lang/rust/issues/47384>
+/// Reference this function somewhere (eg. ´use pthread_3ds::init´ in the main crate) to import all pthread implementations.
 #[inline(always)]
-pub fn init() {
-    condvar::init();
-    misc::init();
-    mutex::init();
-    rwlock::init();
-    thread::init();
-    thread::attr::init();
-    thread_keys::init();
-}
+pub fn init() {}

@@ -1,7 +1,5 @@
 //! Miscellaneous pthread functions
 
-pub fn init() {}
-
 #[no_mangle]
 pub unsafe extern "C" fn sched_yield() -> libc::c_int {
     ctru_sys::svcSleepThread(0);

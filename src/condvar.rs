@@ -1,7 +1,5 @@
 //! PThread condition variables implemented using libctru.
 
-pub fn init() {}
-
 #[no_mangle]
 pub unsafe extern "C" fn pthread_cond_init(
     cond: *mut libc::pthread_cond_t,

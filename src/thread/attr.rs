@@ -1,8 +1,6 @@
 use static_assertions::const_assert;
 use std::mem;
 
-pub fn init() {}
-
 /// Internal struct for storing pthread attribute data
 /// Must be less than or equal to the size of `libc::pthread_attr_t`. We assert
 /// this below via static_assertions.

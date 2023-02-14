@@ -4,8 +4,6 @@ use spin::rwlock::RwLock;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-pub fn init() {}
-
 type Key = usize;
 type Destructor = unsafe extern "C" fn(*mut libc::c_void);
 

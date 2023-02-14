@@ -1,7 +1,5 @@
 //! PThread mutex implemented using libctru.
 
-pub fn init() {}
-
 #[no_mangle]
 pub unsafe extern "C" fn pthread_mutexattr_init(
     _attr: *mut libc::pthread_mutexattr_t,

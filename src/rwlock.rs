@@ -1,7 +1,5 @@
 //! PThread read-write lock implemented using libctru.
 
-pub fn init() {}
-
 use crate::{condvar, mutex};
 
 struct rwlock_clear {

@@ -1,6 +1,5 @@
 //! PThread threads implemented using libctru.
 
-use attr::PThreadAttr;
 use spin::rwlock::RwLock;
 use std::collections::BTreeMap;
 use std::ptr;
@@ -47,16 +46,18 @@ impl<T> Clone for ShareablePtr<T> {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_create(
+pub unsafe extern "C" fn __syscall_thread_create(
     native: *mut libc::pthread_t,
-    attr: *const libc::pthread_attr_t,
     entrypoint: extern "C" fn(_: *mut libc::c_void) -> *mut libc::c_void,
-    value: *mut libc::c_void,
+    arg: *mut libc::c_void,
+    _stackaddr: *const libc::c_void,
+    stacksize: libc::size_t,
 ) -> libc::c_int {
-    let attr = attr as *const PThreadAttr;
-    let stack_size = (*attr).stack_size;
-    let priority = (*attr).priority;
-    let processor_id = (*attr).processor_id;
+    let stack_size = stacksize;
+    // let priority = (*attr).schedparam.sched_priority;
+    let mut priority = 0;
+	let _ = ctru_sys::svcGetThreadPriority(&mut priority, ctru_sys::CUR_THREAD_HANDLE);
+    // let processor_id = (*attr).processor_id;
 
     let thread_id = NEXT_ID.fetch_add(1, Ordering::SeqCst) as libc::pthread_t;
 
@@ -74,7 +75,7 @@ pub unsafe extern "C" fn pthread_create(
     let main: *mut Box<dyn FnOnce()> = Box::into_raw(Box::new(Box::new(move || {
         THREAD_ID = thread_id;
 
-        let result = entrypoint(value);
+        let result = entrypoint(arg);
 
         // Update the threads map with the result, and remove this thread if
         // it's detached.
@@ -97,9 +98,9 @@ pub unsafe extern "C" fn pthread_create(
     let thread = ctru_sys::threadCreate(
         Some(thread_start),
         main as *mut libc::c_void,
-        stack_size,
+        stack_size as usize,
         priority,
-        processor_id,
+        0, // Normal CPU
         false,
     );
 
@@ -138,19 +139,18 @@ pub unsafe extern "C" fn pthread_create(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_join(
+pub unsafe extern "C" fn __syscall_thread_join(
     thread_id: libc::pthread_t,
-    return_value: *mut *mut libc::c_void,
-) -> libc::c_int {
+) -> *const libc::c_void { // The return value is returned as a pointer
     if thread_id == MAIN_THREAD_ID {
         // This is not a valid thread to join on
-        return libc::EINVAL;
+        return std::ptr::null();
     }
 
     let thread_map = THREADS.read();
     let Some(&pthread) = thread_map.get(&thread_id) else {
         // This is not a valid thread ID
-        return libc::ESRCH
+        return std::ptr::null();
     };
     // We need to drop our read guard so it doesn't stay locked while joining
     // the thread.
@@ -158,13 +158,13 @@ pub unsafe extern "C" fn pthread_join(
 
     if pthread.is_detached {
         // Cannot join on a detached thread
-        return libc::EINVAL;
+        return std::ptr::null();
     }
 
     let result = ctru_sys::threadJoin(pthread.thread.0, u64::MAX);
     if ctru_sys::R_FAILED(result) {
         // TODO: improve the error code by checking the result further?
-        return libc::EINVAL;
+        return std::ptr::null();
     }
 
     ctru_sys::threadFree(pthread.thread.0);
@@ -172,16 +172,14 @@ pub unsafe extern "C" fn pthread_join(
 
     // This should always be Some, but we use an if let just in case.
     if let Some(thread_data) = thread_data {
-        if !return_value.is_null() {
-            *return_value = thread_data.result.0;
-        }
+        return thread_data.result.0;
     }
 
-    0
+    std::ptr::null()
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_detach(thread_id: libc::pthread_t) -> libc::c_int {
+pub unsafe extern "C" fn __syscall_thread_detach(thread_id: libc::pthread_t) -> libc::c_int {
     if thread_id == MAIN_THREAD_ID {
         // This is not a valid thread to detach
         return libc::EINVAL;
@@ -210,7 +208,7 @@ pub unsafe extern "C" fn pthread_detach(thread_id: libc::pthread_t) -> libc::c_i
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_self() -> libc::pthread_t {
+pub unsafe extern "C" fn __syscall_thread_self() -> libc::pthread_t {
     let thread_id = THREAD_ID;
 
     if thread_id == MAIN_THREAD_ID {
@@ -339,8 +337,9 @@ pub unsafe extern "C" fn pthread_setschedparam(
 
     0
 }
-
+/*
 #[no_mangle]
 pub unsafe extern "C" fn pthread_getprocessorid_np() -> libc::c_int {
     ctru_sys::svcGetProcessorID()
 }
+*/

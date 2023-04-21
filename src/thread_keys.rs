@@ -19,6 +19,24 @@ fn is_valid_key(key: Key) -> bool {
     KEYS.read().contains_key(&(key as Key))
 }
 
+pub(crate) fn run_local_destructors() {
+    unsafe {
+        // We iterate all the thread-local keys set.
+        //
+        // When using `std` and the `thread_local!` macro there should be only one key registered here,
+        // which is the list of keys to destroy.
+        for (key, value) in LOCALS.iter() {
+            // We retrieve the destructor for a key from the static list.
+            if let Some(destructor) = KEYS.read().get(&key) {
+                // If the destructor is registered for a key, run it.
+                if let Some(d) = destructor {
+                    d(*value);
+                }
+            }
+        }
+    };
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn pthread_key_create(
     key: *mut libc::pthread_key_t,

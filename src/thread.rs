@@ -6,6 +6,8 @@ use std::collections::BTreeMap;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::thread_keys;
+
 pub mod attr;
 
 /// The main thread's pthread ID
@@ -86,6 +88,8 @@ pub unsafe extern "C" fn pthread_create(
         if let Some(mut pthread) = thread_map.get_mut(&thread_id) {
             pthread.is_finished = true;
             pthread.result.0 = result;
+
+            thread_keys::run_local_destructors();
 
             if pthread.is_detached {
                 // libctru will call threadFree once this thread dies

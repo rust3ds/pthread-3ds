@@ -17,7 +17,9 @@ impl Default for PThreadAttr {
         // Note: we are ignoring the result here, but errors shouldn't occur
         // since we're using a valid handle.
         let mut priority = 0;
-        unsafe { ctru_sys::svcGetThreadPriority(&mut priority, ctru_sys::CUR_THREAD_HANDLE) };
+        unsafe {
+            let _ = ctru_sys::svcGetThreadPriority(&mut priority, ctru_sys::CUR_THREAD_HANDLE);
+        }
 
         PThreadAttr {
             stack_size: libc::PTHREAD_STACK_MIN,

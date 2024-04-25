@@ -85,7 +85,7 @@ pub unsafe extern "C" fn pthread_create(
         // check is_detached and it's still false, so thread is never
         // removed from the map)
         let mut thread_map = THREADS.write();
-        if let Some(mut pthread) = thread_map.get_mut(&thread_id) {
+        if let Some(pthread) = thread_map.get_mut(&thread_id) {
             pthread.is_finished = true;
             pthread.result.0 = result;
 
@@ -154,7 +154,7 @@ pub unsafe extern "C" fn pthread_join(
     let thread_map = THREADS.read();
     let Some(&pthread) = thread_map.get(&thread_id) else {
         // This is not a valid thread ID
-        return libc::ESRCH
+        return libc::ESRCH;
     };
     // We need to drop our read guard so it doesn't stay locked while joining
     // the thread.
@@ -192,9 +192,9 @@ pub unsafe extern "C" fn pthread_detach(thread_id: libc::pthread_t) -> libc::c_i
     }
 
     let mut thread_map = THREADS.write();
-    let Some(mut pthread) = thread_map.get_mut(&thread_id) else {
+    let Some(pthread) = thread_map.get_mut(&thread_id) else {
         // This is not a valid thread ID
-        return libc::ESRCH
+        return libc::ESRCH;
     };
 
     if pthread.is_detached {
@@ -253,7 +253,7 @@ impl TryFrom<libc::pthread_t> for Handle {
     fn try_from(thread_id: libc::pthread_t) -> Result<Self, Self::Error> {
         let Some(&pthread) = THREADS.read().get(&thread_id) else {
             // This is not a valid thread ID
-            return Err(libc::ESRCH)
+            return Err(libc::ESRCH);
         };
 
         if pthread.is_finished {

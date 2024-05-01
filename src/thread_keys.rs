@@ -20,7 +20,7 @@ fn is_valid_key(key: Key) -> bool {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_key_create(
+pub unsafe extern "C" fn __syscall_tls_create(
     key: *mut libc::pthread_key_t,
     destructor: Option<Destructor>,
 ) -> libc::c_int {
@@ -33,7 +33,7 @@ pub unsafe extern "C" fn pthread_key_create(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_key_delete(key: libc::pthread_key_t) -> libc::c_int {
+pub unsafe extern "C" fn __syscall_tls_delete(key: libc::pthread_key_t) -> libc::c_int {
     match KEYS.write().remove(&(key as Key)) {
         // We had a entry, so it was a valid key.
         // It's officially undefined behavior if they use the key after this,
@@ -46,7 +46,7 @@ pub unsafe extern "C" fn pthread_key_delete(key: libc::pthread_key_t) -> libc::c
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_getspecific(key: libc::pthread_key_t) -> *mut libc::c_void {
+pub unsafe extern "C" fn __syscall_tls_get(key: libc::pthread_key_t) -> *mut libc::c_void {
     if let Some(&value) = LOCALS.get(&(key as Key)) {
         value as _
     } else {
@@ -56,7 +56,7 @@ pub unsafe extern "C" fn pthread_getspecific(key: libc::pthread_key_t) -> *mut l
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_setspecific(
+pub unsafe extern "C" fn __syscall_tls_set(
     key: libc::pthread_key_t,
     value: *const libc::c_void,
 ) -> libc::c_int {

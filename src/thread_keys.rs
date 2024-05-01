@@ -27,15 +27,15 @@ pub(crate) fn run_local_destructors() {
         // which is the list of keys to destroy.
         for (key, value) in LOCALS.iter() {
             // We retrieve the destructor for a key from the static list.
-            if let Some(destructor) = KEYS.write().get_mut(&key) {
+            if let Some(destructor) = KEYS.write().get_mut(key) {
                 // If the destructor is registered for a key, run it.
                 if let Some(d) = destructor {
                     // Hold the function pointer.
                     let dtor = *d;
 
                     // Set the destructor as null to avoid reentrancy.
-                    *destructor = Some(std::mem::transmute(std::ptr::null::<unsafe fn(*mut libc::c_void)>()));
-                    
+                    *destructor = None;
+
                     dtor(*value);
                 }
             }

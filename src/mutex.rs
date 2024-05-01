@@ -48,9 +48,9 @@ pub unsafe extern "C" fn pthread_mutex_destroy(_lock: *mut libc::pthread_mutex_t
 pub unsafe extern "C" fn pthread_mutex_lock(lock: *mut libc::pthread_mutex_t) -> libc::c_int {
     let lock = lock as *const u8;
 
-    if *(lock.offset(39)) as u8 == libc::PTHREAD_MUTEX_NORMAL as u8 {
+    if *(lock.offset(39)) == libc::PTHREAD_MUTEX_NORMAL as u8 {
         ctru_sys::LightLock_Lock(lock as _);
-    } else if *(lock.offset(39)) as u8 == libc::PTHREAD_MUTEX_RECURSIVE as u8 {
+    } else if *(lock.offset(39)) == libc::PTHREAD_MUTEX_RECURSIVE as u8 {
         ctru_sys::RecursiveLock_Lock(lock as _);
     }
 
@@ -61,9 +61,9 @@ pub unsafe extern "C" fn pthread_mutex_lock(lock: *mut libc::pthread_mutex_t) ->
 pub unsafe extern "C" fn pthread_mutex_trylock(lock: *mut libc::pthread_mutex_t) -> libc::c_int {
     let lock = lock as *const u8;
 
-    if *(lock.offset(39)) as u8 == libc::PTHREAD_MUTEX_NORMAL as u8 {
+    if *(lock.offset(39)) == libc::PTHREAD_MUTEX_NORMAL as u8 {
         return ctru_sys::LightLock_TryLock(lock as _);
-    } else if *(lock.offset(39)) as u8 == libc::PTHREAD_MUTEX_RECURSIVE as u8 {
+    } else if *(lock.offset(39)) == libc::PTHREAD_MUTEX_RECURSIVE as u8 {
         return ctru_sys::RecursiveLock_TryLock(lock as _);
     }
 
@@ -74,9 +74,9 @@ pub unsafe extern "C" fn pthread_mutex_trylock(lock: *mut libc::pthread_mutex_t)
 pub unsafe extern "C" fn pthread_mutex_unlock(lock: *mut libc::pthread_mutex_t) -> libc::c_int {
     let lock = lock as *const u8;
 
-    if *(lock.offset(39)) as u8 == libc::PTHREAD_MUTEX_NORMAL as u8 {
+    if *(lock.offset(39)) == libc::PTHREAD_MUTEX_NORMAL as u8 {
         ctru_sys::LightLock_Unlock(lock as _);
-    } else if *(lock.offset(39)) as u8 == libc::PTHREAD_MUTEX_RECURSIVE as u8 {
+    } else if *(lock.offset(39)) == libc::PTHREAD_MUTEX_RECURSIVE as u8 {
         ctru_sys::RecursiveLock_Unlock(lock as _);
     }
 

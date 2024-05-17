@@ -26,29 +26,22 @@ pub(crate) fn run_local_destructors() {
     //
     // When using `std` and the `thread_local!` macro there should be only one key registered here,
     // which is the list of keys to destroy.
-    let dtors: Vec<_> = unsafe { LOCALS.iter_mut() }
-        .filter_map(|(key, value)| {
-            // We retrieve the destructor for a key from the static list.
-            if let Some(destructor) = KEYS
-                .write()
-                .get_mut(key)
-                // Removing the destructor from the list, so it's not called again.
-                .and_then(Option::take)
-            {
-                // And clearing the destructor arg as well
-                let arg = mem::replace(value, ptr::null_mut());
-                Some((destructor, arg))
-            } else {
-                None
-            }
-        })
-        // Collect destructors separately before running them, so that if any destructor would try
-        // to obtain KEYS' lock, it doesn't deadlock because we're already holding the lock here.
-        .collect();
+    for (key, arg) in unsafe { LOCALS.iter_mut() } {
+        // We retrieve the destructor for a key from the static list. It's important
+        // that we drop the KEYS write lock here to avoid deadlock that could arise
+        // if the destructor itself tries to obtain a lock on KEYS.
+        let maybe_dtor = {
+            let mut keys = KEYS.write();
+            // If the destructor is registered for a key, deregister it...
+            keys.get_mut(key).and_then(Option::take)
+        };
 
-    for (destructor, value) in dtors {
-        unsafe {
-            destructor(value);
+        if let Some(destructor) = maybe_dtor {
+            // ... and clean up its soon-to-maybe-be-dangling arg pointer
+            let arg = mem::replace(arg, ptr::null_mut());
+            unsafe {
+                destructor(arg);
+            }
         }
     }
 }
